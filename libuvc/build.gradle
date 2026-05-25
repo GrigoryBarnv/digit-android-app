@@ -1,0 +1,110 @@
+apply plugin: 'com.android.library'
+
+import org.apache.tools.ant.taskdefs.condition.Os
+import java.util.Properties
+
+android {
+	compileSdkVersion rootProject.ext.versionCompiler
+    ndkVersion = rootProject.ext.ndkVersion
+
+    compileOptions {
+		sourceCompatibility rootProject.ext.javaSourceCompatibility
+		targetCompatibility rootProject.ext.javaTargetCompatibility
+	}
+
+    defaultConfig {
+        minSdkVersion rootProject.ext.minSdkVersion
+		targetSdkVersion rootProject.ext.versionTarget
+    }
+
+	lintOptions {
+		checkReleaseBuilds = false
+		// Or, if you prefer, you can continue to check for errors in release builds,
+		// but continue the build even when errors are found:
+		abortOnError = false
+		// The demo app does not have translations.
+		disable 'MissingTranslation'
+	}
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.txt'
+        }
+    }
+	namespace = 'com.jiangdg.uvccamera'
+
+    sourceSets {
+        main {
+            // Package rebuilt ndk-build outputs instead of stale checked-in copies.
+            jniLibs.srcDirs = ['src/main/libs']
+        }
+    }
+}
+
+tasks.withType(JavaCompile) {
+	compileTask -> compileTask.dependsOn ndkBuild
+}
+
+String getNdkBuildPath() {
+	def ndkBuildingDir = System.getenv("NDK_HOME")
+	if (ndkBuildingDir == null || ndkBuildingDir.isEmpty()) {
+		ndkBuildingDir = System.getenv("ANDROID_NDK_HOME")
+	}
+
+	if (ndkBuildingDir == null || ndkBuildingDir.isEmpty()) {
+		def localPropertiesFile = project.rootProject.file('local.properties')
+		if (localPropertiesFile.exists()) {
+			Properties properties = new Properties()
+			localPropertiesFile.withInputStream { properties.load(it) }
+			ndkBuildingDir = properties.getProperty("ndk.dir")
+
+			if ((ndkBuildingDir == null || ndkBuildingDir.isEmpty())) {
+				def sdkDir = properties.getProperty("sdk.dir")
+				if (sdkDir != null && !sdkDir.isEmpty()) {
+					def sdkFile = file(sdkDir)
+					def versionedNdkDir = new File(sdkFile, "ndk/${rootProject.ext.has('ndkVersion') ? rootProject.ext.ndkVersion : ''}")
+					if (versionedNdkDir.exists()) {
+						ndkBuildingDir = versionedNdkDir.absolutePath
+					} else {
+						def ndkBundleDir = new File(sdkFile, 'ndk-bundle')
+						if (ndkBundleDir.exists()) {
+							ndkBuildingDir = ndkBundleDir.absolutePath
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if (ndkBuildingDir == null || ndkBuildingDir.isEmpty()) {
+		throw new GradleException("Android NDK not found. Set ndk.dir in local.properties, install an SDK NDK package, or define NDK_HOME/ANDROID_NDK_HOME.")
+	}
+
+	def ndkBuildPath = new File(ndkBuildingDir, Os.isFamily(Os.FAMILY_WINDOWS) ? 'ndk-build.cmd' : 'ndk-build')
+	if (!ndkBuildPath.exists()) {
+		throw new GradleException("ndk-build executable not found at ${ndkBuildPath}. Check your NDK installation and local.properties.")
+	}
+	return ndkBuildPath.absolutePath
+}
+
+task ndkBuild(type: Exec, description: 'Compile JNI source via NDK') {
+	println('executing ndkBuild')
+	def ndkBuildPath = getNdkBuildPath();
+	commandLine ndkBuildPath, '-j8', '-C', file('src/main').absolutePath
+}
+
+task ndkClean(type: Exec, description: 'clean JNI libraries') {
+	println('executing ndkBuild clean')
+	def ndkBuildPath = getNdkBuildPath();
+	commandLine ndkBuildPath, 'clean', '-C', file('src/main').absolutePath
+}
+
+clean.dependsOn 'ndkClean'
+
+dependencies {
+    implementation fileTree(dir: new File(buildDir, 'libs'), include: '*.jar')
+	implementation "androidx.appcompat:appcompat:${androidXVersion}"
+	implementation 'com.elvishew:xlog:1.11.0'
+//	implementation project(path: ':libuvccommon')
+}

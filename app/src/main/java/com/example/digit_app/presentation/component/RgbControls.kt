@@ -19,12 +19,12 @@ fun RgbControls(
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Text("R: ${red.toInt()}", color = Color.White)
-        Slider(value = red, onValueChange = onRedChange, valueRange = 0f..100f)
+        Slider(value = red, onValueChange = onRedChange, valueRange = -50f..50f)
 
         Text("G: ${green.toInt()}", color = Color.White)
-        Slider(value = green, onValueChange = onGreenChange, valueRange = 0f..100f)
+        Slider(value = green, onValueChange = onGreenChange, valueRange = -50f..50f)
 
         Text("B: ${blue.toInt()}", color = Color.White)
-        Slider(value = blue, onValueChange = onBlueChange, valueRange = 0f..100f)
+        Slider(value = blue, onValueChange = onBlueChange, valueRange = -50f..50f)
     }
 }
