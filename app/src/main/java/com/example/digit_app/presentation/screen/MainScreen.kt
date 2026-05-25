@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 
 @Composable
 fun MainScreen() {
+    // Top-level app surface.
     MaterialTheme {
         Surface {
             DemoScreen()

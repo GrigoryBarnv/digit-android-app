@@ -12,9 +12,11 @@ import kotlinx.coroutines.launch
 class SplashActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Show splash UI first.
         setContent { SplashScreen() }
 
         lifecycleScope.launch {
+            // Short splash delay before opening the main screen.
             delay(1200)
             startActivity(Intent(this@SplashActivity, MainActivity::class.java))
             finish()

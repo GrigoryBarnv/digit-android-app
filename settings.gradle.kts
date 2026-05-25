@@ -1,4 +1,10 @@
 pluginManagement {
+    plugins {
+        id("com.android.application") version "9.1.1"
+        id("com.android.library") version "9.1.1"
+        id("kotlin-android") version "2.2.10"
+        id("org.jetbrains.kotlin.plugin.compose") version "2.2.10"
+    }
     repositories {
         google {
             content {
@@ -24,4 +30,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "digit-app"
 include(":app")
+include(":libausbc")
+include(":libnative")
+include(":libuvc")
  
