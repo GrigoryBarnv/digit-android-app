@@ -2,9 +2,9 @@ name: Android CI
 
 on:
   push:
-    branches: [ "main", "develop" ]
+    branches: [ "main", "develop", "screen-rgb" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "screen-rgb" ]
 
 jobs:
   build:
@@ -41,3 +41,4 @@ jobs:
           name: app-debug-apk
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
