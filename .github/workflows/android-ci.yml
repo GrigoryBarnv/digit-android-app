@@ -1,4 +1,4 @@
-﻿name: Android CI
+name: Android CI
 
 on:
   push:
@@ -19,6 +19,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install CMake 3.10.2
+        run: sdkmanager --install "cmake;3.10.2.4988404"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
