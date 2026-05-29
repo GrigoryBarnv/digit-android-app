@@ -12,6 +12,7 @@ import com.jiangdg.ausbc.MultiCameraClient
 import com.jiangdg.ausbc.base.CameraFragment
 import com.jiangdg.ausbc.camera.CameraUVC
 import com.jiangdg.ausbc.callback.ICameraStateCallBack
+import com.jiangdg.ausbc.callback.ICaptureCallBack
 import com.jiangdg.ausbc.utils.Logger
 import com.jiangdg.ausbc.widget.AspectRatioTextureView
 import com.jiangdg.ausbc.widget.IAspectRatio
@@ -26,7 +27,7 @@ class CameraPreviewFragment : CameraFragment() {
 
     private var _binding: FragmentCameraPreviewBinding? = null
     private val binding: FragmentCameraPreviewBinding
-        get() = _binding!!
+        get() = _binding!! //binding should not be null, if null the app will crash
     private var permissionRetryJob: Job? = null
 
     override fun getRootView(inflater: LayoutInflater, container: ViewGroup?): View {
@@ -107,6 +108,53 @@ class CameraPreviewFragment : CameraFragment() {
         Logger.i("CameraPreviewFragment", "applyRgb r=$red g=$green b=$blue intensity=$intensity zoomEcho=$zoomEcho")
     }
 
+    /**
+     * True only when the fragment is attached AND the USB camera is open and streaming.
+     * Always check this before attempting a capture.
+     */
+    val isCameraReady: Boolean
+        get() = isAdded && _binding != null && isCameraOpened()
+
+    /**
+     * Takes a single photo from the USB camera and saves it to the Pictures folder.
+     * [onDone] is called on the main thread with:
+     *   success = true  and the file path when it works
+     *   success = false and an error message when something goes wrong
+     */
+    fun capturePhoto(onDone: (success: Boolean, path: String?) -> Unit) {
+        // Bug fix #2: guard against calling captureImage when the fragment or camera isn't ready.
+        // Without this, calling captureImage while the camera is still opening causes undefined behavior.
+        if (!isCameraReady) {
+            onDone(false, "Camera is not ready yet")
+            return
+        }
+
+        captureImage(object : ICaptureCallBack {
+            // Called right when the capture starts — nothing to do here yet
+            override fun onBegin() {}
+
+            // Bug fix #1: use activity? instead of requireActivity().
+            // requireActivity() throws IllegalStateException if the fragment has been detached
+            // from the screen by the time this background callback fires.
+            // activity? safely returns null in that case, and the ?. means "skip if null."
+            override fun onError(error: String?) {
+                activity?.runOnUiThread { onDone(false, error ?: "Unknown capture error") }
+            }
+
+            // Bug fix #3: treat a null path as failure, not success.
+            // captureImage() can call onComplete(null) if the file write failed silently.
+            override fun onComplete(path: String?) {
+                activity?.runOnUiThread {
+                    if (path != null) {
+                        onDone(true, path)
+                    } else {
+                        onDone(false, "Photo was not saved (null path)")
+                    }
+                }
+            }
+        })
+    }
+
     private fun startPermissionOpenRetry(initialDelayMs: Long) {
         permissionRetryJob?.cancel()
         permissionRetryJob = lifecycleScope.launch {
@@ -130,6 +178,23 @@ class CameraPreviewFragment : CameraFragment() {
 
         fun pushRgb(red: Int, green: Int, blue: Int) {
             activeInstance?.applyRgb(red, green, blue)
+        }
+
+        /**
+         * Called from the UI (DemoScreen) to trigger a photo capture.
+         *
+         * Returns false if:
+         *  - no camera fragment exists yet, OR
+         *  - Bug fix #4: the camera exists but hasn't opened yet (still connecting).
+         *    Previously this only checked activeInstance != null, which meant tapping
+         *    capture during "Waiting for USB camera..." would reach captureImage() in
+         *    an undefined state.
+         */
+        fun requestCapture(onDone: (success: Boolean, path: String?) -> Unit): Boolean {
+            val instance = activeInstance ?: return false
+            if (!instance.isCameraReady) return false
+            instance.capturePhoto(onDone)
+            return true
         }
     }
 }
