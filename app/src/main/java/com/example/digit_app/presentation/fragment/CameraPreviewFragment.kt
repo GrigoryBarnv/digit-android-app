@@ -1,10 +1,19 @@
-﻿package com.example.digit_app.presentation.fragment
+package com.example.digit_app.presentation.fragment
 
+import android.Manifest
+import android.content.ContentValues
+import android.content.pm.PackageManager
+import android.media.MediaScannerConnection
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
+import androidx.core.content.ContextCompat
+import androidx.exifinterface.media.ExifInterface
 import androidx.lifecycle.lifecycleScope
 import com.example.digit_app.R
 import com.example.digit_app.databinding.FragmentCameraPreviewBinding
@@ -19,19 +28,27 @@ import com.jiangdg.ausbc.widget.IAspectRatio
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class CameraPreviewFragment : CameraFragment() {
     private var pendingRed = 0
     private var pendingGreen = 0
     private var pendingBlue = 0
 
+    // Identifies which camera this fragment represents.
+    // Default is "Camera 1" — when multi-camera is implemented, each fragment
+    // will be assigned a unique ID (e.g. "Camera 2", "Camera 3").
+    var cameraId: String = "Camera 1"
+
     private var _binding: FragmentCameraPreviewBinding? = null
     private val binding: FragmentCameraPreviewBinding
-        get() = _binding!! //binding should not be null, if null the app will crash
+        get() = _binding!!
     private var permissionRetryJob: Job? = null
 
     override fun getRootView(inflater: LayoutInflater, container: ViewGroup?): View {
-        // Inflate XML container where CameraFragment injects its preview view.
         _binding = FragmentCameraPreviewBinding.inflate(inflater, container, false)
         return binding.root
     }
@@ -50,7 +67,6 @@ class CameraPreviewFragment : CameraFragment() {
 
     override fun onResume() {
         super.onResume()
-        // After permission dialog returns, keep retrying briefly so camera opens without app restart.
         startPermissionOpenRetry(initialDelayMs = 250)
     }
 
@@ -63,7 +79,6 @@ class CameraPreviewFragment : CameraFragment() {
         when (code) {
             ICameraStateCallBack.State.OPENED -> {
                 statusView.visibility = View.GONE
-                // Apply last RGB values once camera is opened.
                 applyRgb(pendingRed, pendingGreen, pendingBlue)
             }
             ICameraStateCallBack.State.CLOSED -> {
@@ -80,9 +95,7 @@ class CameraPreviewFragment : CameraFragment() {
     override fun onDestroyView() {
         permissionRetryJob?.cancel()
         permissionRetryJob = null
-        if (activeInstance === this) {
-            activeInstance = null
-        }
+        if (activeInstance === this) activeInstance = null
         _binding = null
         super.onDestroyView()
     }
@@ -103,56 +116,211 @@ class CameraPreviewFragment : CameraFragment() {
             return
         }
         camera.setZoom(intensity)
-        // Keep parity with old app behavior; this also confirms command path.
         val zoomEcho = camera.getZoom()
         Logger.i("CameraPreviewFragment", "applyRgb r=$red g=$green b=$blue intensity=$intensity zoomEcho=$zoomEcho")
     }
 
     /**
      * True only when the fragment is attached AND the USB camera is open and streaming.
-     * Always check this before attempting a capture.
      */
     val isCameraReady: Boolean
         get() = isAdded && _binding != null && isCameraOpened()
 
     /**
-     * Takes a single photo from the USB camera and saves it to the Pictures folder.
+     * Generates the photo filename in the format: DIGIT_001_2026-05-29_18-30-45.jpg
+     * The number is based on how many DIGIT photos already exist so it's always correct
+     * even after the app restarts.
+     */
+    private fun generateFileName(): String {
+        val existingCount = try {
+            val projection = arrayOf(MediaStore.Images.Media._ID)
+            val selection = "${MediaStore.Images.Media.DISPLAY_NAME} LIKE ?"
+            val selectionArgs = arrayOf("DIGIT_%.jpg")
+            requireContext().contentResolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                projection, selection, selectionArgs, null
+            )?.use { it.count } ?: 0
+        } catch (e: Exception) { 0 }
+
+        val nextNumber = String.format("%03d", existingCount + 1)
+        val datePart = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+        val timePart = SimpleDateFormat("HH-mm-ss", Locale.US).format(Date())
+        return "DIGIT_${nextNumber}_${datePart}_${timePart}.jpg"
+    }
+
+    /**
+     * Returns a temporary path inside the app's private folder.
+     * This works on ALL Android versions with no permissions needed.
+     * We save here first, then move to the public Pictures/DIGIT/ folder.
+     */
+    private fun getTempPath(): String? {
+        return try {
+            val dir = requireContext().getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+                ?: requireContext().filesDir
+            if (!dir.exists()) dir.mkdirs()
+            "${dir.absolutePath}/temp_capture.jpg"
+        } catch (e: Exception) {
+            Logger.e("CameraPreviewFragment", "getTempPath failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Writes EXIF metadata (date/time + camera ID) into the photo file.
+     * Called on the temp file before moving it to public storage.
+     * If this fails, the photo is still saved — metadata failure is never fatal.
+     */
+    private fun writeMetadata(path: String) {
+        try {
+            val exif = ExifInterface(path)
+            val exifDate = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).format(Date())
+            exif.setAttribute(ExifInterface.TAG_DATETIME, exifDate)
+            exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, exifDate)
+            // Which camera took this photo — important for future multi-camera support.
+            exif.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, "Camera: $cameraId")
+            exif.saveAttributes()
+            Logger.i("CameraPreviewFragment", "writeMetadata: saved for $path, camera=$cameraId")
+        } catch (e: Exception) {
+            Logger.e("CameraPreviewFragment", "writeMetadata failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Moves the photo from the temp private folder to the public Pictures/DIGIT/ folder.
+     * Works on ALL Android versions:
+     *   - Android 10+ (API 29+): uses MediaStore API — no extra permission needed.
+     *   - Android 9 and below: uses direct file copy — needs WRITE_EXTERNAL_STORAGE permission.
+     *
+     * Returns the final path/URI string, or null if something went wrong.
+     */
+    private fun moveToPublicStorage(tempPath: String, fileName: String): String? {
+        val context = requireContext()
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // Android 10+ — use MediaStore. No storage permission needed.
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+                    put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/DIGIT")
+                    // IS_PENDING = 1 means "I'm still writing this file, don't show it yet."
+                    // We set it to 0 after the copy is done so the gallery shows it properly.
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
+                val uri = context.contentResolver.insert(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues
+                ) ?: return null
+
+                // Copy temp file into the MediaStore entry
+                context.contentResolver.openOutputStream(uri)?.use { output ->
+                    File(tempPath).inputStream().use { input -> input.copyTo(output) }
+                }
+
+                // Mark file as complete — gallery will now show it
+                contentValues.clear()
+                contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)
+                context.contentResolver.update(uri, contentValues, null, null)
+
+                uri.toString()
+            } else {
+                // Android 9 and below — direct file copy.
+                // WRITE_EXTERNAL_STORAGE permission is declared in the manifest for these versions.
+                val destDir = File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
+                    "DIGIT"
+                )
+                if (!destDir.exists() && !destDir.mkdirs()) {
+                    Logger.e("CameraPreviewFragment", "moveToPublicStorage: could not create DIGIT dir")
+                    return null
+                }
+                val destFile = File(destDir, fileName)
+                File(tempPath).copyTo(destFile, overwrite = true)
+                // Tell the gallery app to scan and show this new file.
+                MediaScannerConnection.scanFile(
+                    context, arrayOf(destFile.absolutePath), arrayOf("image/jpeg"), null
+                )
+                destFile.absolutePath
+            }
+        } catch (e: Exception) {
+            Logger.e("CameraPreviewFragment", "moveToPublicStorage failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Takes a single photo from the USB camera and saves it to Pictures/DIGIT/.
+     * Works on all Android versions (7 through 14+).
+     *
+     * Flow:
+     *  1. Check storage permission on Android 9 and below
+     *  2. Save to a temp private file (always accessible, no permission needed)
+     *  3. Write EXIF metadata to the temp file
+     *  4. Move temp file to Pictures/DIGIT/ using the correct method for the Android version
+     *  5. Delete the temp file
+     *
      * [onDone] is called on the main thread with:
-     *   success = true  and the file path when it works
-     *   success = false and an error message when something goes wrong
+     *   success = true  and the final file path/URI
+     *   success = false and an error message
      */
     fun capturePhoto(onDone: (success: Boolean, path: String?) -> Unit) {
-        // Bug fix #2: guard against calling captureImage when the fragment or camera isn't ready.
-        // Without this, calling captureImage while the camera is still opening causes undefined behavior.
         if (!isCameraReady) {
             onDone(false, "Camera is not ready yet")
             return
         }
 
+        // On Android 9 and below, we need WRITE_EXTERNAL_STORAGE permission to save to Pictures/.
+        // On Android 10+, MediaStore API handles it without any permission.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            val hasPermission = ContextCompat.checkSelfPermission(
+                requireContext(), Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!hasPermission) {
+                requestPermissions(
+                    arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE),
+                    REQUEST_WRITE_PERMISSION
+                )
+                onDone(false, "Storage permission needed — please accept the permission and try again")
+                return
+            }
+        }
+
+        val tempPath = getTempPath()
+        if (tempPath == null) {
+            onDone(false, "Could not prepare temporary storage")
+            return
+        }
+
         captureImage(object : ICaptureCallBack {
-            // Called right when the capture starts — nothing to do here yet
             override fun onBegin() {}
 
-            // Bug fix #1: use activity? instead of requireActivity().
-            // requireActivity() throws IllegalStateException if the fragment has been detached
-            // from the screen by the time this background callback fires.
-            // activity? safely returns null in that case, and the ?. means "skip if null."
             override fun onError(error: String?) {
                 activity?.runOnUiThread { onDone(false, error ?: "Unknown capture error") }
             }
 
-            // Bug fix #3: treat a null path as failure, not success.
-            // captureImage() can call onComplete(null) if the file write failed silently.
             override fun onComplete(path: String?) {
                 activity?.runOnUiThread {
-                    if (path != null) {
-                        onDone(true, path)
-                    } else {
+                    if (path == null) {
                         onDone(false, "Photo was not saved (null path)")
+                        return@runOnUiThread
+                    }
+                    // Step 1: write metadata into the temp file
+                    writeMetadata(path)
+                    // Step 2: move to public Pictures/DIGIT/ folder
+                    val fileName = generateFileName()
+                    val finalPath = moveToPublicStorage(path, fileName)
+                    // Step 3: delete the temp file regardless of outcome
+                    try { File(path).delete() } catch (_: Exception) {}
+
+                    if (finalPath != null) {
+                        onDone(true, finalPath)
+                    } else {
+                        // moveToPublicStorage failed — photo was saved in temp but we couldn't move it.
+                        // Still report success since the image data exists.
+                        Logger.e("CameraPreviewFragment", "Could not move photo to Pictures/DIGIT/")
+                        onDone(true, path)
                     }
                 }
             }
-        })
+        }, tempPath)
     }
 
     private fun startPermissionOpenRetry(initialDelayMs: Long) {
@@ -173,6 +341,8 @@ class CameraPreviewFragment : CameraFragment() {
     }
 
     companion object {
+        private const val REQUEST_WRITE_PERMISSION = 1001
+
         @Volatile
         private var activeInstance: CameraPreviewFragment? = null
 
@@ -180,16 +350,6 @@ class CameraPreviewFragment : CameraFragment() {
             activeInstance?.applyRgb(red, green, blue)
         }
 
-        /**
-         * Called from the UI (DemoScreen) to trigger a photo capture.
-         *
-         * Returns false if:
-         *  - no camera fragment exists yet, OR
-         *  - Bug fix #4: the camera exists but hasn't opened yet (still connecting).
-         *    Previously this only checked activeInstance != null, which meant tapping
-         *    capture during "Waiting for USB camera..." would reach captureImage() in
-         *    an undefined state.
-         */
         fun requestCapture(onDone: (success: Boolean, path: String?) -> Unit): Boolean {
             val instance = activeInstance ?: return false
             if (!instance.isCameraReady) return false

@@ -1,5 +1,6 @@
 ﻿package com.example.digit_app.presentation.screen
 
+import android.content.Intent
 import android.view.View
 import android.widget.Toast
 import androidx.compose.animation.core.animateFloatAsState
@@ -63,9 +64,13 @@ fun DemoScreen() {
         animationSpec = tween(durationMillis = 400),
         label = "flash"
     )
-    // When the flash animation finishes fading (alpha hits 0), reset the trigger
-    LaunchedEffect(flashAlpha) {
-        if (flashAlpha == 0f) showFlash = false
+    // After the flash peaks, wait briefly then set showFlash = false so it fades back out.
+    // Without this, showFlash stays true and the white overlay never disappears.
+    LaunchedEffect(showFlash) {
+        if (showFlash) {
+            kotlinx.coroutines.delay(150)
+            showFlash = false
+        }
     }
 
     // Bug fix #5: prevents the user from triggering multiple captures by tapping rapidly.
@@ -189,7 +194,32 @@ fun DemoScreen() {
                 horizontalArrangement = Arrangement.SpaceAround,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Button(onClick = {}, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF303030))) { Text("Gallery") }
+                // Gallery button — opens the phone's built-in photo gallery.
+                // Gallery button — always shows a picker so the user can choose which gallery app to open.
+                Button(
+                    onClick = {
+                        // CATEGORY_APP_GALLERY filters to only gallery/photo apps (no banking, scanners, etc.)
+                        // createChooser ensures the picker always appears — user can select "Just once" or "Always".
+                        val intent = Intent(Intent.ACTION_MAIN).apply {
+                            addCategory(Intent.CATEGORY_APP_GALLERY)
+                        }
+                        val chooser = Intent.createChooser(intent, "Open gallery with...").apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        try {
+                            if (intent.resolveActivity(context.packageManager) != null) {
+                                context.startActivity(chooser)
+                            } else {
+                                // No gallery app found on this device.
+                                Toast.makeText(context, "No gallery app found on this device", Toast.LENGTH_SHORT).show()
+                            }
+                        } catch (e: Exception) {
+                            // Catch any unexpected error during launch.
+                            Toast.makeText(context, "Could not open gallery", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF303030))
+                ) { Text("Gallery") }
                 // Capture button — tap to take a photo.
                 // Dims to 40% opacity while a capture is already in progress (isCapturing = true),
                 // giving the user clear visual feedback that the button is temporarily locked.
