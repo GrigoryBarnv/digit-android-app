@@ -33,6 +33,10 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+// ─── Recording state shared with DemoScreen ──────────────────────────────────
+// DemoScreen observes this to update the UI (red button, timer, toast).
+typealias RecordingCallback = (success: Boolean, path: String?) -> Unit
+
 class CameraPreviewFragment : CameraFragment() {
     private var pendingRed = 0
     private var pendingGreen = 0
@@ -151,14 +155,14 @@ class CameraPreviewFragment : CameraFragment() {
     /**
      * Returns a temporary path inside the app's private folder.
      * This works on ALL Android versions with no permissions needed.
-     * We save here first, then move to the public Pictures/DIGIT/ folder.
+     * We save here first, then move to the public Pictures/DIGIT/ or Videos/DIGIT/ folder.
      */
-    private fun getTempPath(): String? {
+    private fun getTempPath(extension: String = "jpg"): String? {
         return try {
             val dir = requireContext().getExternalFilesDir(Environment.DIRECTORY_PICTURES)
                 ?: requireContext().filesDir
             if (!dir.exists()) dir.mkdirs()
-            "${dir.absolutePath}/temp_capture.jpg"
+            "${dir.absolutePath}/temp_capture.$extension"
         } catch (e: Exception) {
             Logger.e("CameraPreviewFragment", "getTempPath failed: ${e.message}")
             null
@@ -323,6 +327,150 @@ class CameraPreviewFragment : CameraFragment() {
         }, tempPath)
     }
 
+    // ─── Video recording ──────────────────────────────────────────────────────
+
+    /**
+     * Generates a video filename: DIGIT_VID_001_2026-05-29_18-30-45.mp4
+     * Counter is based on existing DIGIT_VID_ files in the Videos collection.
+     */
+    private fun generateVideoFileName(): String {
+        val existingCount = try {
+            val projection = arrayOf(MediaStore.Video.Media._ID)
+            val selection = "${MediaStore.Video.Media.DISPLAY_NAME} LIKE ?"
+            val selectionArgs = arrayOf("DIGIT_VID_%.mp4")
+            requireContext().contentResolver.query(
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                projection, selection, selectionArgs, null
+            )?.use { it.count } ?: 0
+        } catch (e: Exception) { 0 }
+
+        val nextNumber = String.format("%03d", existingCount + 1)
+        val datePart = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+        val timePart = SimpleDateFormat("HH-mm-ss", Locale.US).format(Date())
+        return "DIGIT_VID_${nextNumber}_${datePart}_${timePart}.mp4"
+    }
+
+    /**
+     * Moves a finished video from the temp private folder to Videos/DIGIT/.
+     * Android 10+: MediaStore API (no permission needed).
+     * Android 9-: direct file copy (needs WRITE_EXTERNAL_STORAGE).
+     */
+    private fun moveVideoToPublicStorage(tempPath: String, fileName: String): String? {
+        val context = requireContext()
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.Video.Media.DISPLAY_NAME, fileName)
+                    put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                    put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/DIGIT")
+                    put(MediaStore.Video.Media.IS_PENDING, 1)
+                }
+                val uri = context.contentResolver.insert(
+                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI, contentValues
+                ) ?: return null
+
+                context.contentResolver.openOutputStream(uri)?.use { output ->
+                    File(tempPath).inputStream().use { input -> input.copyTo(output) }
+                }
+
+                contentValues.clear()
+                contentValues.put(MediaStore.Video.Media.IS_PENDING, 0)
+                context.contentResolver.update(uri, contentValues, null, null)
+                uri.toString()
+            } else {
+                val destDir = File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
+                    "DIGIT"
+                )
+                if (!destDir.exists() && !destDir.mkdirs()) {
+                    Logger.e("CameraPreviewFragment", "moveVideoToPublicStorage: could not create DIGIT dir")
+                    return null
+                }
+                val destFile = File(destDir, fileName)
+                File(tempPath).copyTo(destFile, overwrite = true)
+                MediaScannerConnection.scanFile(
+                    context, arrayOf(destFile.absolutePath), arrayOf("video/mp4"), null
+                )
+                destFile.absolutePath
+            }
+        } catch (e: Exception) {
+            Logger.e("CameraPreviewFragment", "moveVideoToPublicStorage failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Starts video recording.
+     * [onStarted] is called immediately on the main thread so the UI can show the recording state.
+     * [onDone] is called when recording is stopped and the file is saved.
+     */
+    fun startVideoRecording(
+        onStarted: () -> Unit,
+        onDone: RecordingCallback
+    ) {
+        if (!isCameraReady) {
+            onDone(false, "Camera is not ready yet")
+            return
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            val hasPermission = ContextCompat.checkSelfPermission(
+                requireContext(), Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!hasPermission) {
+                requestPermissions(
+                    arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE),
+                    REQUEST_WRITE_PERMISSION
+                )
+                onDone(false, "Storage permission needed — please accept and try again")
+                return
+            }
+        }
+
+        val tempPath = getTempPath("mp4")
+        if (tempPath == null) {
+            onDone(false, "Could not prepare temporary storage")
+            return
+        }
+
+        captureVideoStart(object : ICaptureCallBack {
+            override fun onBegin() {
+                // onBegin fires on the camera thread — bounce to main thread for UI.
+                activity?.runOnUiThread { onStarted() }
+            }
+
+            override fun onError(error: String?) {
+                activity?.runOnUiThread { onDone(false, error ?: "Unknown recording error") }
+            }
+
+            override fun onComplete(path: String?) {
+                activity?.runOnUiThread {
+                    if (path == null) {
+                        onDone(false, "Video was not saved (null path)")
+                        return@runOnUiThread
+                    }
+                    val fileName = generateVideoFileName()
+                    val finalPath = moveVideoToPublicStorage(path, fileName)
+                    try { File(path).delete() } catch (_: Exception) {}
+
+                    if (finalPath != null) {
+                        onDone(true, finalPath)
+                    } else {
+                        Logger.e("CameraPreviewFragment", "Could not move video to Movies/DIGIT/")
+                        onDone(true, path) // temp path — video still exists
+                    }
+                }
+            }
+        }, tempPath)
+    }
+
+    /**
+     * Stops an in-progress recording. onDone from [startVideoRecording] will be called
+     * once the file is finalised and moved to Videos/DIGIT/.
+     */
+    fun stopVideoRecording() {
+        captureVideoStop()
+    }
+
     private fun startPermissionOpenRetry(initialDelayMs: Long) {
         permissionRetryJob?.cancel()
         permissionRetryJob = lifecycleScope.launch {
@@ -355,6 +503,26 @@ class CameraPreviewFragment : CameraFragment() {
             if (!instance.isCameraReady) return false
             instance.capturePhoto(onDone)
             return true
+        }
+
+        /**
+         * Starts video recording. Returns false if the camera is not ready.
+         * [onStarted] fires as soon as the encoder begins (use it to flip the UI to "recording").
+         * [onDone] fires when the file is saved after [requestStopRecording] is called.
+         */
+        fun requestStartRecording(
+            onStarted: () -> Unit,
+            onDone: RecordingCallback
+        ): Boolean {
+            val instance = activeInstance ?: return false
+            if (!instance.isCameraReady) return false
+            instance.startVideoRecording(onStarted, onDone)
+            return true
+        }
+
+        /** Stops the current recording. Does nothing if no recording is active. */
+        fun requestStopRecording() {
+            activeInstance?.stopVideoRecording()
         }
     }
 }
