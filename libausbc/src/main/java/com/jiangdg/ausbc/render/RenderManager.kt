@@ -17,6 +17,7 @@ package com.jiangdg.ausbc.render
 
 import android.content.ContentValues
 import android.content.Context
+import android.os.Build
 import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
 import android.opengl.EGLContext
@@ -477,10 +478,15 @@ class RenderManager(
         val values = ContentValues()
         values.put(MediaStore.Images.ImageColumns.TITLE, title)
         values.put(MediaStore.Images.ImageColumns.DISPLAY_NAME, displayName)
-        values.put(MediaStore.Images.ImageColumns.DATA, path)
         values.put(MediaStore.Images.ImageColumns.DATE_TAKEN, date)
         values.put(MediaStore.Images.ImageColumns.WIDTH, width)
         values.put(MediaStore.Images.ImageColumns.HEIGHT, height)
+        // DATA (_data) column is read-only on Android 10+ (API 29+).
+        // Setting it on modern Android causes an IllegalArgumentException crash.
+        // On Android 9 and below it is still needed so the gallery can find the file.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            values.put(MediaStore.Images.ImageColumns.DATA, path)
+        }
         mContext.contentResolver?.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
         mMainHandler.post {
             mCaptureDataCb?.onComplete(path)
