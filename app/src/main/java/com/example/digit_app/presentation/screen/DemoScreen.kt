@@ -1,4 +1,4 @@
-﻿package com.example.digit_app.presentation.screen
+package com.example.digit_app.presentation.screen
 
 import android.content.Intent
 import android.view.View
@@ -22,11 +22,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -35,8 +38,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
 import androidx.fragment.app.FragmentContainerView
 import androidx.fragment.app.commit
@@ -55,17 +60,17 @@ fun DemoScreen() {
     val cameraFragmentTag = "camera_preview_fragment"
     val context = LocalContext.current
 
-    // Controls the white "flash" effect when a photo is taken.
-    // true = flash is visible, false = fading out.
+    // ── Mode: "photo" or "video" ──────────────────────────────────────────────
+    var isVideoMode by remember { mutableStateOf(false) }
+    var showModeMenu by remember { mutableStateOf(false) }
+
+    // ── Photo: flash overlay ──────────────────────────────────────────────────
     var showFlash by remember { mutableStateOf(false) }
-    // animateFloatAsState smoothly changes the alpha (opacity) from 0.7 → 0 over 400ms
     val flashAlpha by animateFloatAsState(
         targetValue = if (showFlash) 0.7f else 0f,
         animationSpec = tween(durationMillis = 400),
         label = "flash"
     )
-    // After the flash peaks, wait briefly then set showFlash = false so it fades back out.
-    // Without this, showFlash stays true and the white overlay never disappears.
     LaunchedEffect(showFlash) {
         if (showFlash) {
             kotlinx.coroutines.delay(150)
@@ -73,30 +78,74 @@ fun DemoScreen() {
         }
     }
 
-    // Bug fix #5: prevents the user from triggering multiple captures by tapping rapidly.
-    // While a capture is in progress, the button is locked and visually dimmed.
+    // ── Photo: capture lock (prevents double-tap) ─────────────────────────────
     var isCapturing by remember { mutableStateOf(false) }
 
-    fun onCaptureClicked() {
-        // If a capture is already running, ignore the tap entirely.
-        if (isCapturing) return
-        isCapturing = true
+    // ── Video: recording state + elapsed-time counter ─────────────────────────
+    var isRecording by remember { mutableStateOf(false) }
+    var recordingSeconds by remember { mutableIntStateOf(0) }
 
-        val cameraReady = CameraPreviewFragment.requestCapture { success, path ->
-            // This runs when the capture finishes (success or failure).
-            // Always unlock the button here — whether it worked or not.
-            isCapturing = false
-            if (success) {
-                showFlash = true
-                Toast.makeText(context, "Photo saved!", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(context, "Capture failed: $path", Toast.LENGTH_SHORT).show()
+    // Tick the timer up every second while recording.
+    LaunchedEffect(isRecording) {
+        if (isRecording) {
+            recordingSeconds = 0
+            while (isRecording) {
+                kotlinx.coroutines.delay(1_000)
+                recordingSeconds++
             }
+        } else {
+            recordingSeconds = 0
         }
-        if (!cameraReady) {
-            // Camera not connected or not open yet — unlock immediately.
-            isCapturing = false
-            Toast.makeText(context, "Camera not ready", Toast.LENGTH_SHORT).show()
+    }
+
+    // Format seconds → "MM:SS"
+    fun formatTimer(seconds: Int): String {
+        val m = seconds / 60
+        val s = seconds % 60
+        return "%02d:%02d".format(m, s)
+    }
+
+    // ── Capture button handler ────────────────────────────────────────────────
+    fun onCaptureClicked() {
+        if (isVideoMode) {
+            if (!isRecording) {
+                // Start recording
+                val started = CameraPreviewFragment.requestStartRecording(
+                    onStarted = { isRecording = true },
+                    onDone = { success, path ->
+                        isRecording = false
+                        if (success) {
+                            Toast.makeText(context, "Video saved!", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "Recording failed: $path", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                )
+                if (!started) {
+                    Toast.makeText(context, "Camera not ready", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                // Stop recording — onDone above fires once the file is finalised
+                CameraPreviewFragment.requestStopRecording()
+            }
+        } else {
+            // Photo mode
+            if (isCapturing) return
+            isCapturing = true
+
+            val cameraReady = CameraPreviewFragment.requestCapture { success, path ->
+                isCapturing = false
+                if (success) {
+                    showFlash = true
+                    Toast.makeText(context, "Photo saved!", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "Capture failed: $path", Toast.LENGTH_SHORT).show()
+                }
+            }
+            if (!cameraReady) {
+                isCapturing = false
+                Toast.makeText(context, "Camera not ready", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -176,7 +225,6 @@ fun DemoScreen() {
                 )
 
                 // White flash overlay — appears briefly when a photo is taken.
-                // alpha() makes it invisible when flashAlpha is 0, so it doesn't block touches.
                 if (flashAlpha > 0f) {
                     Box(
                         modifier = Modifier
@@ -185,9 +233,34 @@ fun DemoScreen() {
                             .background(Color.White, RoundedCornerShape(12.dp))
                     )
                 }
+
+                // Recording indicator — red dot + timer shown in top-left of the preview.
+                if (isRecording) {
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(10.dp)
+                            .background(Color(0x99000000), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .background(Color.Red, CircleShape)
+                        )
+                        Text(
+                            text = formatTimer(recordingSeconds),
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
             }
 
-            Spacer(modifier = Modifier.height(12.dp)) //Like an invisible gap
+            Spacer(modifier = Modifier.height(12.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -195,11 +268,8 @@ fun DemoScreen() {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // Gallery button — opens the phone's built-in photo gallery.
-                // Gallery button — always shows a picker so the user can choose which gallery app to open.
                 Button(
                     onClick = {
-                        // CATEGORY_APP_GALLERY filters to only gallery/photo apps (no banking, scanners, etc.)
-                        // createChooser ensures the picker always appears — user can select "Just once" or "Always".
                         val intent = Intent(Intent.ACTION_MAIN).apply {
                             addCategory(Intent.CATEGORY_APP_GALLERY)
                         }
@@ -210,28 +280,63 @@ fun DemoScreen() {
                             if (intent.resolveActivity(context.packageManager) != null) {
                                 context.startActivity(chooser)
                             } else {
-                                // No gallery app found on this device.
                                 Toast.makeText(context, "No gallery app found on this device", Toast.LENGTH_SHORT).show()
                             }
                         } catch (e: Exception) {
-                            // Catch any unexpected error during launch.
                             Toast.makeText(context, "Could not open gallery", Toast.LENGTH_SHORT).show()
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF303030))
                 ) { Text("Gallery") }
-                // Capture button — tap to take a photo.
-                // Dims to 40% opacity while a capture is already in progress (isCapturing = true),
-                // giving the user clear visual feedback that the button is temporarily locked.
+
+                // Capture / Record button.
+                // Photo mode: white circle, dims while capturing.
+                // Video mode: white circle normally, red circle while recording.
+                val captureButtonColor = when {
+                    isVideoMode && isRecording -> Color.Red
+                    else -> Color.White
+                }
+                val captureButtonAlpha = if (!isVideoMode && isCapturing) 0.4f else 1f
                 Box(
                     modifier = Modifier
                         .size(72.dp)
-                        .alpha(if (isCapturing) 0.4f else 1f)
-                        .background(Color.White, CircleShape)
+                        .alpha(captureButtonAlpha)
+                        .background(captureButtonColor, CircleShape)
                         .border(4.dp, Color(0xFF303030), CircleShape)
                         .clickable(enabled = !isCapturing) { onCaptureClicked() }
                 )
-                Button(onClick = {}, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF303030))) { Text("Mode") }
+
+                // Mode button — opens a dropdown to choose Photo or Video.
+                // Disabled while recording so the user can't switch mid-clip.
+                Box {
+                    Button(
+                        onClick = { if (!isRecording) showModeMenu = true },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isVideoMode) Color(0xFF8B0000) else Color(0xFF303030)
+                        )
+                    ) {
+                        Text(if (isVideoMode) "🎥 Video" else "📷 Photo")
+                    }
+                    DropdownMenu(
+                        expanded = showModeMenu,
+                        onDismissRequest = { showModeMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("📷  Photo") },
+                            onClick = {
+                                isVideoMode = false
+                                showModeMenu = false
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("🎥  Video") },
+                            onClick = {
+                                isVideoMode = true
+                                showModeMenu = false
+                            }
+                        )
+                    }
+                }
             }
         }
 
@@ -251,7 +356,7 @@ fun DemoScreen() {
                     green = green.floatValue,
                     blue = blue.floatValue,
                     onRedChange = {
-                        red.floatValue = it //it = new slider value.
+                        red.floatValue = it
                         applyRgbToCamera(red.floatValue, green.floatValue, blue.floatValue)
                     },
                     onGreenChange = {
@@ -267,4 +372,3 @@ fun DemoScreen() {
         }
     }
 }
-

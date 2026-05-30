@@ -248,6 +248,16 @@ class Mp4Muxer(
             if (videoPath.isNullOrEmpty()) {
                 return
             }
+            // On Android 10+ skip the MediaStore insert here — CameraPreviewFragment
+            // handles moving the video to Movies/DIGIT/ via the IS_PENDING pattern.
+            // Inserting a private-path file into MediaStore on Android 10+ fails with
+            // "Mutation of _data is not allowed".
+            if (MediaUtils.isAboveQ()) {
+                mMainHandler.post {
+                    mCaptureCallBack?.onComplete(this.path)
+                }
+                return
+            }
             ctx.contentResolver.let { content ->
                 val uri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
                 content.insert(uri, getVideoContentValues(videoPath))
@@ -261,7 +271,10 @@ class Mp4Muxer(
     private fun getVideoContentValues(path: String): ContentValues {
         val file = File(path)
         val values = ContentValues()
-        values.put(MediaStore.Video.Media.DATA, path)
+        // DATA (_data) is read-only on Android 10+ — only set it on Android 9 and below.
+        if (!MediaUtils.isAboveQ()) {
+            values.put(MediaStore.Video.Media.DATA, path)
+        }
         values.put(MediaStore.Video.Media.DISPLAY_NAME, file.name)
         values.put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
         values.put(MediaStore.Video.Media.SIZE, file.length())
