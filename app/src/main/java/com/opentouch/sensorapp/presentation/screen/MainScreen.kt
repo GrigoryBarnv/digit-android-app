@@ -1,4 +1,4 @@
-﻿package com.example.digit_app.presentation.screen
+﻿package com.opentouch.sensorapp.presentation.screen
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface

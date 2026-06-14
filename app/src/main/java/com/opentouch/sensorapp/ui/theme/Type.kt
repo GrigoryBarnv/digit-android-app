@@ -1,4 +1,4 @@
-package com.example.digit_app.ui.theme
+package com.opentouch.sensorapp.ui.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle

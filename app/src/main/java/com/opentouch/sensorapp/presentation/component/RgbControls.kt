@@ -1,4 +1,4 @@
-﻿package com.example.digit_app.presentation.component
+﻿package com.opentouch.sensorapp.presentation.component
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -9,11 +9,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 
 @Composable
+//Creates a Compose UI component called RgbControls.
+//This component can be reused anywhere.
 fun RgbControls(
     red: Float,
     green: Float,
     blue: Float,
-    onRedChange: (Float) -> Unit,
+    onRedChange: (Float) -> Unit, //Receives float, returns nothing
     onGreenChange: (Float) -> Unit,
     onBlueChange: (Float) -> Unit
 ) {

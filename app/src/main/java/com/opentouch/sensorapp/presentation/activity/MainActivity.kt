@@ -1,4 +1,4 @@
-package com.example.digit_app.presentation.activity
+package com.opentouch.sensorapp.presentation.activity
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -7,7 +7,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
-import com.example.digit_app.presentation.screen.MainScreen
+import com.opentouch.sensorapp.presentation.screen.MainScreen
 
 class MainActivity : FragmentActivity() {
     private val permissionLauncher =
@@ -25,8 +25,7 @@ class MainActivity : FragmentActivity() {
 
     private fun ensureRuntimePermissions() {
         val required = arrayOf(
-            Manifest.permission.CAMERA,
-            Manifest.permission.RECORD_AUDIO
+            Manifest.permission.CAMERA
         )
         val missing = required.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED

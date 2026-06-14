@@ -1,4 +1,4 @@
-package com.example.digit_app
+package com.opentouch.sensorapp
 
 import org.junit.Test
 

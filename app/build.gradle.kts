@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.digit_app"
+    namespace = "com.opentouch.sensorapp"
     ndkVersion = "27.0.12077973"
     compileSdk {
         version = release(36) {
@@ -13,7 +13,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.digit_app"
+        applicationId = "com.opentouch.sensorapp"
         minSdk = 24
         targetSdk = 36
         versionCode = 1

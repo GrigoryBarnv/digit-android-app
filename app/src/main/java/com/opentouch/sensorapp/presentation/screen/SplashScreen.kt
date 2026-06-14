@@ -1,4 +1,4 @@
-﻿package com.example.digit_app.presentation.screen
+﻿package com.opentouch.sensorapp.presentation.screen
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -15,7 +15,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.digit_app.R
+import com.opentouch.sensorapp.R
 
 @Composable
 fun SplashScreen() {
