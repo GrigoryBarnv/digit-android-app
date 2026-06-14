@@ -1,11 +1,11 @@
-﻿package com.example.digit_app.presentation.activity
+﻿package com.opentouch.sensorapp.presentation.activity
 
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.lifecycle.lifecycleScope
-import com.example.digit_app.presentation.screen.SplashScreen
+import com.opentouch.sensorapp.presentation.screen.SplashScreen
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 

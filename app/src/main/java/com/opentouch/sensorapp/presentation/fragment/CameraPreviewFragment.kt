@@ -1,4 +1,4 @@
-package com.example.digit_app.presentation.fragment
+package com.opentouch.sensorapp.presentation.fragment
 
 import android.Manifest
 import android.content.ContentValues
@@ -15,8 +15,8 @@ import android.widget.TextView
 import androidx.core.content.ContextCompat
 import androidx.exifinterface.media.ExifInterface
 import androidx.lifecycle.lifecycleScope
-import com.example.digit_app.R
-import com.example.digit_app.databinding.FragmentCameraPreviewBinding
+import com.opentouch.sensorapp.R
+import com.opentouch.sensorapp.databinding.FragmentCameraPreviewBinding
 import com.jiangdg.ausbc.MultiCameraClient
 import com.jiangdg.ausbc.base.CameraFragment
 import com.jiangdg.ausbc.camera.CameraUVC

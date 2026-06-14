@@ -1,4 +1,4 @@
-package com.example.digit_app.presentation.screen
+package com.opentouch.sensorapp.presentation.screen
 
 import android.content.Intent
 import android.view.View
@@ -45,8 +45,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
 import androidx.fragment.app.FragmentContainerView
 import androidx.fragment.app.commit
-import com.example.digit_app.presentation.component.RgbControls
-import com.example.digit_app.presentation.fragment.CameraPreviewFragment
+import com.opentouch.sensorapp.presentation.component.RgbControls
+import com.opentouch.sensorapp.presentation.fragment.CameraPreviewFragment
 import kotlin.math.roundToInt
 
 @Composable
@@ -177,7 +177,7 @@ fun DemoScreen() {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text("DIGIT", color = Color.White)
+                Text("Open Touch", color = Color.White)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = {}, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2D2D2D))) { Text("FPS") }
                     Button(

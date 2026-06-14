@@ -1,4 +1,4 @@
-package com.example.digit_app.ui.theme
+package com.opentouch.sensorapp.ui.theme
 
 import android.app.Activity
 import android.os.Build
