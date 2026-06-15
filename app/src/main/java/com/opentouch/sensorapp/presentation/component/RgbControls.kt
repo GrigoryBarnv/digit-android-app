@@ -3,6 +3,7 @@
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -21,12 +22,36 @@ fun RgbControls(
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Text("R: ${red.toInt()}", color = Color.White)
-        Slider(value = red, onValueChange = onRedChange, valueRange = -50f..50f)
+        Slider(
+            value = red,
+            onValueChange = onRedChange,
+            valueRange = -50f..50f,
+            colors = SliderDefaults.colors(
+                thumbColor = Color.Red,
+                activeTrackColor = Color.Red
+            )
+        )
 
         Text("G: ${green.toInt()}", color = Color.White)
-        Slider(value = green, onValueChange = onGreenChange, valueRange = -50f..50f)
+        Slider(
+            value = green,
+            onValueChange = onGreenChange,
+            valueRange = -50f..50f,
+            colors = SliderDefaults.colors(
+                thumbColor = Color.Green,
+                activeTrackColor = Color.Green
+            )
+        )
 
         Text("B: ${blue.toInt()}", color = Color.White)
-        Slider(value = blue, onValueChange = onBlueChange, valueRange = -50f..50f)
+        Slider(
+            value = blue,
+            onValueChange = onBlueChange,
+            valueRange = -50f..50f,
+            colors = SliderDefaults.colors(
+                thumbColor = Color.Blue,
+                activeTrackColor = Color.Blue
+            )
+        )
     }
 }
