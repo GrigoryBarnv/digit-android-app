@@ -444,9 +444,7 @@ class RenderManager(
         val path = savePath ?: "$mCameraDir/$displayName"
         val width = mWidth
         val height = mHeight
-        // 写入文件
-        // glReadPixels读取的是大端数据，但是我们保存的是小端
-        // 故需要将图片上下颠倒为正
+
         var fos: FileOutputStream? = null
         try {
             fos = FileOutputStream(path)

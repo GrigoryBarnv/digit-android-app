@@ -12,6 +12,8 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.ContextCompat
 import androidx.exifinterface.media.ExifInterface
 import androidx.lifecycle.lifecycleScope
@@ -20,8 +22,10 @@ import com.opentouch.sensorapp.databinding.FragmentCameraPreviewBinding
 import com.jiangdg.ausbc.MultiCameraClient
 import com.jiangdg.ausbc.base.CameraFragment
 import com.jiangdg.ausbc.camera.CameraUVC
+import com.jiangdg.ausbc.camera.bean.CameraRequest
 import com.jiangdg.ausbc.callback.ICameraStateCallBack
 import com.jiangdg.ausbc.callback.ICaptureCallBack
+import com.jiangdg.ausbc.render.env.RotateType
 import com.jiangdg.ausbc.utils.Logger
 import com.jiangdg.ausbc.widget.AspectRatioTextureView
 import com.jiangdg.ausbc.widget.IAspectRatio
@@ -52,16 +56,69 @@ class CameraPreviewFragment : CameraFragment() {
         get() = _binding!!
     private var permissionRetryJob: Job? = null
 
+    // True while the camera is being closed because the user tapped "Cancel"
+    // on the "is this sensor supported?" popup (as opposed to the sensor
+    // being physically unplugged). Read once by onCameraState(CLOSED) to
+    // decide whether to show the "Sensor disconnected" + Reconnect UI.
+    private var declinedClose = false
+
     override fun getRootView(inflater: LayoutInflater, container: ViewGroup?): View {
         _binding = FragmentCameraPreviewBinding.inflate(inflater, container, false)
+        binding.reconnectButton.setOnClickListener { onReconnectClicked() }
         return binding.root
     }
 
-    override fun getCameraView(): IAspectRatio = AspectRatioTextureView(requireContext())
+    // scaleY = -1f flips only the camera image vertically (so the bottom of
+    // the physical sensor maps to the bottom of the screen). This affects
+    // just the camera preview surface — text and other UI on screen are
+    // untouched.
+    override fun getCameraView(): IAspectRatio = AspectRatioTextureView(requireContext()).apply {
+        scaleY = -1f
+    }
 
     override fun getCameraViewContainer(): ViewGroup = binding.cameraViewContainer
 
     override fun getGravity(): Int = Gravity.CENTER
+
+    /**
+     * The raw image coming off the USB sensor comes out sideways — the sensor
+     * streams a landscape (320x240) image, but we want it to fill the screen
+     * upright (portrait), with the sensor's flat edge at the bottom of the
+     * screen and its rounded edge at the top.
+     *
+     * Two things work together to do this:
+     *  1. [SENSOR_ROTATE_TYPE] rotates the actual image content.
+     *  2. When that rotation is 90 or 270 degrees, we swap the width/height we
+     *     report below (320x240 -> 240x320) so the preview BOX is portrait-
+     *     shaped too — otherwise the rotated image would be squeezed into a
+     *     landscape-shaped box with black bars.
+     *
+     * [SENSOR_ROTATE_TYPE] is the only thing you need to change: with the
+     * sensor plugged in and the preview showing, try ANGLE_90, ANGLE_270,
+     * ANGLE_0 or ANGLE_180 (and FLIP_UP_DOWN / FLIP_LEFT_RIGHT if a rotation
+     * alone doesn't fix it — some sensors are mirrored) until the image fills
+     * the box upright with the flat edge at the bottom.
+     */
+    override fun getCameraRequest(): CameraRequest {
+        // Swap dimensions for 90/270 degree rotations so the preview box
+        // becomes portrait-shaped to match the rotated image.
+        val isQuarterTurn = SENSOR_ROTATE_TYPE == RotateType.ANGLE_90 ||
+            SENSOR_ROTATE_TYPE == RotateType.ANGLE_270
+        val width = if (isQuarterTurn) 240 else 320
+        val height = if (isQuarterTurn) 320 else 240
+
+        return CameraRequest.Builder()
+            .setPreviewWidth(width)
+            .setPreviewHeight(height)
+            .setRenderMode(CameraRequest.RenderMode.OPENGL)
+            .setDefaultRotateType(SENSOR_ROTATE_TYPE)
+            .setAudioSource(CameraRequest.AudioSource.SOURCE_SYS_MIC)
+            .setPreviewFormat(CameraRequest.PreviewFormat.FORMAT_MJPEG)
+            .setAspectRatioShow(true)
+            .setCaptureRawImage(false)
+            .setRawPreviewData(false)
+            .create()
+    }
 
     override fun initData() {
         super.initData()
@@ -83,11 +140,53 @@ class CameraPreviewFragment : CameraFragment() {
         when (code) {
             ICameraStateCallBack.State.OPENED -> {
                 statusView.visibility = View.GONE
+                _binding?.reconnectButton?.visibility = View.GONE
                 applyRgb(pendingRed, pendingGreen, pendingBlue)
+                permissionRetryJob?.cancel()
+
+                // The system "Allow Open Touch to access ...?" dialog (shown
+                // automatically when the USB device was attached) has now
+                // been resolved and the camera is streaming. Show the
+                // "is this sensor supported?" popup now, so it appears AFTER
+                // the system dialog instead of at the same time as it.
+                val device = getDeviceList()?.firstOrNull()
+                if (device != null) {
+                    val key = "${device.vendorId}:${device.productId}"
+                    if (key != lastDetectedDeviceKey) {
+                        lastDetectedDeviceKey = key
+                        detectionSequence++
+                        _connectDecision = ConnectDecision.NONE
+                        _detectedDevice.value = DetectedDevice(
+                            name = device.productName?.takeIf { it.isNotBlank() }
+                                ?: "Unknown USB device",
+                            vendorId = device.vendorId,
+                            productId = device.productId,
+                            sequence = detectionSequence
+                        )
+                    }
+                }
             }
             ICameraStateCallBack.State.CLOSED -> {
                 statusView.visibility = View.VISIBLE
-                statusView.text = getString(R.string.camera_disconnected)
+                // Forget the device so the "sensor connected" popup shows
+                // again the next time a camera opens for it.
+                lastDetectedDeviceKey = null
+                if (declinedClose) {
+                    // The user tapped "Cancel" on the sensor popup, which is
+                    // what closed the camera. Show a clear "disconnected"
+                    // message with a way to reconnect, instead of the
+                    // misleading "requesting permission" polling status.
+                    declinedClose = false
+                    statusView.text = getString(R.string.sensor_disconnected_declined)
+                    _binding?.reconnectButton?.visibility = View.VISIBLE
+                } else {
+                    // The sensor was unplugged (or the camera otherwise
+                    // closed for some other reason). Resume looking for a
+                    // device.
+                    statusView.text = getString(R.string.camera_disconnected)
+                    _binding?.reconnectButton?.visibility = View.GONE
+                    startPermissionOpenRetry(initialDelayMs = 500)
+                }
             }
             ICameraStateCallBack.State.ERROR -> {
                 statusView.visibility = View.VISIBLE
@@ -107,6 +206,37 @@ class CameraPreviewFragment : CameraFragment() {
     override fun onStart() {
         super.onStart()
         activeInstance = this
+    }
+
+    /**
+     * Stops the camera preview/stream. Called when the user taps "Cancel" on
+     * the "is this sensor supported?" popup — by that point the library has
+     * already requested USB permission and opened the camera automatically
+     * (that's what triggers the popup), so declining needs to explicitly
+     * close it again rather than just dismissing the dialog.
+     */
+    fun stopCameraForDeclinedSensor() {
+        declinedClose = true
+        closeCamera()
+    }
+
+    /**
+     * Called when the user taps the "Reconnect" button shown after declining
+     * the sensor popup. Re-requests permission for the still-attached
+     * device, which Android typically grants instantly (no system dialog)
+     * since it was already approved once, re-opening the camera and showing
+     * the sensor popup again.
+     */
+    private fun onReconnectClicked() {
+        _binding?.reconnectButton?.visibility = View.GONE
+        val device = getDeviceList()?.firstOrNull()
+        if (device != null) {
+            _binding?.statusText?.text = getString(R.string.camera_detected_requesting_permission)
+            requestPermission(device)
+        } else {
+            _binding?.statusText?.text = getString(R.string.camera_waiting_for_device)
+            startPermissionOpenRetry(initialDelayMs = 500)
+        }
     }
 
     fun applyRgb(red: Int, green: Int, blue: Int) {
@@ -480,19 +610,111 @@ class CameraPreviewFragment : CameraFragment() {
                 if (isCameraOpened()) return@launch
                 val firstDevice = getDeviceList()?.firstOrNull()
                 if (firstDevice != null) {
+                    // The sensor's FTDI FT900 chip briefly shows up as its own
+                    // bootloader ("FT900 DFU Mode") for a second or two while it
+                    // boots, before re-enumerating as the real "DIGIT" sensor.
+                    // If we show the popup for that transient identity, the user
+                    // sees "not supported" for their actual (supported) sensor.
+                    // So: ignore this identity for a few seconds and wait for the
+                    // real device to show up. If it's STILL stuck like this after
+                    // ~6 seconds, fall through as normal (so a genuinely
+                    // stuck-in-DFU sensor doesn't hang forever).
+                    val isTransientBootloader = firstDevice.vendorId == FTDI_BOOTLOADER_VENDOR_ID &&
+                        firstDevice.productId == FT900_DFU_PRODUCT_ID
+                    if (isTransientBootloader && ftdiBootloaderPollCount < 12) {
+                        ftdiBootloaderPollCount++
+                        _binding?.statusText?.text = getString(R.string.camera_waiting_for_device)
+                        lastDetectedDeviceKey = null
+                        delay(500)
+                        return@repeat
+                    }
+                    ftdiBootloaderPollCount = 0
+
+                    // A real device is attached. The library automatically
+                    // calls requestPermission() on attach, which shows the
+                    // system "Allow Open Touch to access ...?" dialog — we
+                    // don't need to (and shouldn't) call it again here. Just
+                    // show a waiting message and let the polling loop notice
+                    // once the camera opens (onCameraState will show our
+                    // "sensor supported?" popup right after that).
                     _binding?.statusText?.text = getString(R.string.camera_detected_requesting_permission)
-                    requestPermission(firstDevice)
+                } else {
+                    // No device connected — forget the last one, so plugging the
+                    // same sensor back in later will show the popup again.
+                    lastDetectedDeviceKey = null
                 }
                 delay(500)
             }
         }
     }
 
+    /** The user's response to the "Connect/Cancel" sensor popup. */
+    enum class ConnectDecision { NONE, CONNECT, CANCEL }
+
+    /** A USB device that was just detected, for the "is this sensor supported?" popup. */
+    data class DetectedDevice(
+        val name: String,
+        val vendorId: Int,
+        val productId: Int,
+        // Increments each time a device is (re)detected. Without this, plugging
+        // the same sensor back in would produce an identical DetectedDevice
+        // (data classes compare by value), so Compose state wouldn't register
+        // a change and the popup wouldn't reappear.
+        val sequence: Int
+    )
+
     companion object {
         private const val REQUEST_WRITE_PERMISSION = 1001
 
+        // FTDI's vendor ID, and the product ID the FT900 chip on the sensor
+        // reports while it's still in its bootloader (DFU) mode during boot —
+        // before it re-enumerates as the real "DIGIT" sensor.
+        private const val FTDI_BOOTLOADER_VENDOR_ID = 0x0403
+        private const val FT900_DFU_PRODUCT_ID = 0x0FDE
+
+        // Change this to ANGLE_270 / ANGLE_0 / ANGLE_180 / FLIP_UP_DOWN /
+        // FLIP_LEFT_RIGHT to correct the sensor's orientation on screen —
+        // see getCameraRequest() above for details.
+        private val SENSOR_ROTATE_TYPE = RotateType.ANGLE_90
+
         @Volatile
         private var activeInstance: CameraPreviewFragment? = null
+
+        // The most recently detected USB device, and whether the UI has already
+        // shown a popup for it. DemoScreen reads [detectedDevice] and shows a
+        // dialog whenever it changes to a new, non-null value.
+        private val _detectedDevice = mutableStateOf<DetectedDevice?>(null)
+        val detectedDevice: State<DetectedDevice?> get() = _detectedDevice
+
+        // VID:PID of the last device we reported, so we don't spam the popup
+        // every poll cycle while waiting for permission/connection.
+        private var lastDetectedDeviceKey: String? = null
+
+        // Bumped every time a device is (re)detected — see DetectedDevice.sequence.
+        private var detectionSequence = 0
+
+        // How many consecutive polls we've seen the FT900 bootloader identity —
+        // see the "isTransientBootloader" check in startPermissionOpenRetry().
+        private var ftdiBootloaderPollCount = 0
+
+        // The user's response to the "Connect/Cancel" popup for the most
+        // recently detected device. The polling loop waits on this before
+        // requesting USB permission.
+        @Volatile
+        private var _connectDecision: ConnectDecision = ConnectDecision.NONE
+
+        /** Call when the user taps "Connect" on the sensor popup. */
+        fun confirmConnect() {
+            _connectDecision = ConnectDecision.CONNECT
+        }
+
+        /** Call when the user taps "Cancel" on the sensor popup. */
+        fun declineConnect() {
+            _connectDecision = ConnectDecision.CANCEL
+            // The camera was already opened automatically (that's what
+            // triggered this popup) — stop streaming since the user declined.
+            activeInstance?.stopCameraForDeclinedSensor()
+        }
 
         fun pushRgb(red: Int, green: Int, blue: Int) {
             activeInstance?.applyRgb(red, green, blue)

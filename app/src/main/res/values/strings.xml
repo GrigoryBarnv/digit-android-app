@@ -5,5 +5,7 @@
     <string name="camera_opened">Camera opened</string>
     <string name="camera_closed">Camera closed</string>
     <string name="camera_disconnected">Camera disconnected. Please connect again.</string>
+    <string name="sensor_disconnected_declined">Sensor disconnected.</string>
+    <string name="reconnect_button">Reconnect</string>
     <string name="camera_error">Camera error: %1$s</string>
 </resources>

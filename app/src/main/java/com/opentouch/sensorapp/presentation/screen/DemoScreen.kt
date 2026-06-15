@@ -11,6 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,11 +21,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -36,16 +39,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
 import androidx.fragment.app.FragmentContainerView
 import androidx.fragment.app.commit
+import com.opentouch.sensorapp.data.SupportedSensors
 import com.opentouch.sensorapp.presentation.component.RgbControls
+import com.opentouch.sensorapp.presentation.component.SensorPreviewShape
 import com.opentouch.sensorapp.presentation.fragment.CameraPreviewFragment
 import kotlin.math.roundToInt
 
@@ -80,6 +88,12 @@ fun DemoScreen() {
 
     // ── Photo: capture lock (prevents double-tap) ─────────────────────────────
     var isCapturing by remember { mutableStateOf(false) }
+
+    // ── USB sensor connection popup ────────────────────────────────────────────
+    // Shows the detected sensor's name/IDs and whether it's a supported model,
+    // whenever a new USB device is detected by CameraPreviewFragment.
+    val detectedDevice = CameraPreviewFragment.detectedDevice.value
+    var dismissedSequence by remember { mutableIntStateOf(0) }
 
     // ── Video: recording state + elapsed-time counter ─────────────────────────
     var isRecording by remember { mutableStateOf(false) }
@@ -190,12 +204,14 @@ fun DemoScreen() {
                 }
             }
 
+            val sensorShape = remember { SensorPreviewShape() }
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .border(1.dp, Color(0xFF3D3D3D), RoundedCornerShape(12.dp))
-                    .background(Color.Black, RoundedCornerShape(12.dp))
+                    .clip(sensorShape)
+                    .border(1.dp, Color(0xFF3D3D3D), sensorShape)
+                    .background(Color.Black, sensorShape)
             ) {
                 // Bridge: embed Fragment-based USB camera preview inside Compose.
                 AndroidView(
@@ -234,12 +250,15 @@ fun DemoScreen() {
                     )
                 }
 
-                // Recording indicator — red dot + timer shown in top-left of the preview.
+                // Recording indicator — red dot + timer shown in the dome's
+                // empty space at the top-center of the preview.
+                // (TopStart/TopEnd corners are clipped away by the dome
+                // shape, so the indicator must sit near the top-center.)
                 if (isRecording) {
                     Row(
                         modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(10.dp)
+                            .align(Alignment.TopCenter)
+                            .padding(top = 16.dp)
                             .background(Color(0x99000000), RoundedCornerShape(6.dp))
                             .padding(horizontal = 8.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -260,11 +279,16 @@ fun DemoScreen() {
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
+            // Row of 4 primary actions: Gallery, Photo/Video, AI, Settings.
+            // Each button shares the row equally so labels never get squeezed
+            // into a multi-line wrap.
+            val actionButtonPadding = PaddingValues(horizontal = 2.dp, vertical = 8.dp)
+            val actionButtonTextStyle = TextStyle(fontSize = 12.sp)
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceAround,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // Gallery button — opens the phone's built-in photo gallery.
@@ -286,36 +310,31 @@ fun DemoScreen() {
                             Toast.makeText(context, "Could not open gallery", Toast.LENGTH_SHORT).show()
                         }
                     },
+                    modifier = Modifier.weight(1f),
+                    contentPadding = actionButtonPadding,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF303030))
-                ) { Text("Gallery") }
-
-                // Capture / Record button.
-                // Photo mode: white circle, dims while capturing.
-                // Video mode: white circle normally, red circle while recording.
-                val captureButtonColor = when {
-                    isVideoMode && isRecording -> Color.Red
-                    else -> Color.White
+                ) {
+                    Text("🖼️ Gallery", style = actionButtonTextStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                val captureButtonAlpha = if (!isVideoMode && isCapturing) 0.4f else 1f
-                Box(
-                    modifier = Modifier
-                        .size(72.dp)
-                        .alpha(captureButtonAlpha)
-                        .background(captureButtonColor, CircleShape)
-                        .border(4.dp, Color(0xFF303030), CircleShape)
-                        .clickable(enabled = !isCapturing) { onCaptureClicked() }
-                )
 
-                // Mode button — opens a dropdown to choose Photo or Video.
-                // Disabled while recording so the user can't switch mid-clip.
-                Box {
+                // Photo/Video button — opens a dropdown to choose Photo or Video.
+                // Ignored while recording (so the user can't switch mid-clip),
+                // but kept visually "enabled" so the label doesn't fade out.
+                Box(modifier = Modifier.weight(1f)) {
                     Button(
                         onClick = { if (!isRecording) showModeMenu = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = actionButtonPadding,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (isVideoMode) Color(0xFF8B0000) else Color(0xFF303030)
                         )
                     ) {
-                        Text(if (isVideoMode) "🎥 Video" else "📷 Photo")
+                        Text(
+                            if (isVideoMode) "🎥 Video" else "📷 Photo",
+                            style = actionButtonTextStyle,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                     DropdownMenu(
                         expanded = showModeMenu,
@@ -337,6 +356,54 @@ fun DemoScreen() {
                         )
                     }
                 }
+
+                // AI button — placeholder for future on-device ML features.
+                Button(
+                    onClick = {
+                        Toast.makeText(context, "AI features coming soon", Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier.weight(1f),
+                    contentPadding = actionButtonPadding,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF303030))
+                ) {
+                    Text("🤖 AI", style = actionButtonTextStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+
+                // Settings button — placeholder, no functionality yet.
+                Button(
+                    onClick = { },
+                    modifier = Modifier.weight(1f),
+                    contentPadding = actionButtonPadding,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF303030))
+                ) {
+                    Text("⚙️ Settings", style = actionButtonTextStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Capture / Record button, centered below the action row.
+            // Photo mode: white circle, dims while capturing.
+            // Video mode: white circle normally, red circle while recording.
+            val captureButtonColor = when {
+                isVideoMode && isRecording -> Color.Red
+                else -> Color.White
+            }
+            val captureButtonAlpha = if (!isVideoMode && isCapturing) 0.4f else 1f
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 4.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(72.dp)
+                        .alpha(captureButtonAlpha)
+                        .background(captureButtonColor, CircleShape)
+                        .border(4.dp, Color(0xFF303030), CircleShape)
+                        .clickable(enabled = !isCapturing) { onCaptureClicked() }
+                )
             }
         }
 
@@ -346,29 +413,98 @@ fun DemoScreen() {
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .padding(bottom = 96.dp)
+                    .padding(bottom = 144.dp)
                     .background(Color(0xFF262626), RoundedCornerShape(12.dp))
                     .border(1.dp, Color(0xFF3D3D3D), RoundedCornerShape(12.dp))
                     .padding(12.dp)
             ) {
-                RgbControls(
-                    red = red.floatValue,
-                    green = green.floatValue,
-                    blue = blue.floatValue,
-                    onRedChange = {
-                        red.floatValue = it
-                        applyRgbToCamera(red.floatValue, green.floatValue, blue.floatValue)
-                    },
-                    onGreenChange = {
-                        green.floatValue = it
-                        applyRgbToCamera(red.floatValue, green.floatValue, blue.floatValue)
-                    },
-                    onBlueChange = {
-                        blue.floatValue = it
-                        applyRgbToCamera(red.floatValue, green.floatValue, blue.floatValue)
-                    }
-                )
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    RgbControls(
+                        red = red.floatValue,
+                        green = green.floatValue,
+                        blue = blue.floatValue,
+                        onRedChange = {
+                            red.floatValue = it
+                            applyRgbToCamera(red.floatValue, green.floatValue, blue.floatValue)
+                        },
+                        onGreenChange = {
+                            green.floatValue = it
+                            applyRgbToCamera(red.floatValue, green.floatValue, blue.floatValue)
+                        },
+                        onBlueChange = {
+                            blue.floatValue = it
+                            applyRgbToCamera(red.floatValue, green.floatValue, blue.floatValue)
+                        }
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Apply button — confirms the current RGB values and
+                    // closes the panel, so the user doesn't need to tap the
+                    // RGB button again separately to dismiss it.
+                    Button(
+                        onClick = {
+                            applyRgbToCamera(red.floatValue, green.floatValue, blue.floatValue)
+                            showRgbControls = false
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4A4A4A))
+                    ) { Text("Apply") }
+                }
             }
+        }
+
+        // ── "Sensor supported?" popup ───────────────────────────────────────
+        // Appears once whenever a new USB device is detected. Lists which
+        // sensors the app supports, shows the detected sensor and whether it
+        // is on that list, and lets the user Connect (proceed to the USB
+        // permission prompt) or Cancel (skip it for this device).
+        if (detectedDevice != null && detectedDevice.sequence != dismissedSequence) {
+            val supported = SupportedSensors.find(detectedDevice.vendorId, detectedDevice.productId)
+            AlertDialog(
+                onDismissRequest = {
+                    dismissedSequence = detectedDevice.sequence
+                    CameraPreviewFragment.declineConnect()
+                },
+                title = { Text(if (supported != null) "Sensor supported" else "Sensor not supported") },
+                text = {
+                    Column {
+                        Text("Supported sensors:")
+                        SupportedSensors.list.forEach { sensor ->
+                            Text("• ${sensor.displayName}")
+                        }
+                        if (SupportedSensors.list.isEmpty()) {
+                            Text("• (none added yet)")
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Detected sensor: ${detectedDevice.name}")
+                        Text("Vendor ID: 0x%04X (%d)".format(detectedDevice.vendorId, detectedDevice.vendorId))
+                        Text("Product ID: 0x%04X (%d)".format(detectedDevice.productId, detectedDevice.productId))
+                        Spacer(modifier = Modifier.height(8.dp))
+                        if (supported != null) {
+                            Text("✓ This sensor (${supported.displayName}) is supported.")
+                        } else {
+                            Text("✗ This sensor is not supported by the app.")
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        dismissedSequence = detectedDevice.sequence
+                        CameraPreviewFragment.confirmConnect()
+                    }) {
+                        Text("Connect")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        dismissedSequence = detectedDevice.sequence
+                        CameraPreviewFragment.declineConnect()
+                    }) {
+                        Text("Cancel")
+                    }
+                }
+            )
         }
     }
 }
