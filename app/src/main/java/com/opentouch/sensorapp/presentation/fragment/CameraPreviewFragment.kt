@@ -27,8 +27,8 @@ import com.jiangdg.ausbc.callback.ICameraStateCallBack
 import com.jiangdg.ausbc.callback.ICaptureCallBack
 import com.jiangdg.ausbc.render.env.RotateType
 import com.jiangdg.ausbc.utils.Logger
-import com.jiangdg.ausbc.widget.AspectRatioTextureView
 import com.jiangdg.ausbc.widget.IAspectRatio
+import com.opentouch.sensorapp.presentation.component.FillTextureView
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -72,7 +72,7 @@ class CameraPreviewFragment : CameraFragment() {
     // the physical sensor maps to the bottom of the screen). This affects
     // just the camera preview surface — text and other UI on screen are
     // untouched.
-    override fun getCameraView(): IAspectRatio = AspectRatioTextureView(requireContext()).apply {
+    override fun getCameraView(): IAspectRatio = FillTextureView(requireContext()).apply {
         scaleY = -1f
     }
 

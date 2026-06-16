@@ -13,6 +13,28 @@
         tools:ignore="ScopedStorage" />
     <uses-feature android:name="android.hardware.usb.host" />
 
+    <!-- Tell Android 11+ which apps we need to interact with (package visibility). -->
+    <queries>
+        <!-- Needed to find gallery apps via CATEGORY_APP_GALLERY on Android 11+. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.APP_GALLERY" />
+        </intent>
+        <!-- Google Photos / Gallery Go — don't declare CATEGORY_APP_GALLERY. -->
+        <package android:name="com.google.android.apps.photos" />
+        <package android:name="com.google.android.apps.photosgo" />
+        <!-- Samsung Gallery — One UI 3+ uses a different package that doesn't
+             declare CATEGORY_APP_GALLERY, so we must list it explicitly. -->
+        <package android:name="com.samsung.android.app.gallery" />
+        <package android:name="com.sec.android.gallery3d" />
+        <!-- Other common manufacturer galleries that may skip the category. -->
+        <package android:name="com.miui.gallery" />
+        <package android:name="com.asus.gallery" />
+        <package android:name="com.oneplus.gallery" />
+        <package android:name="com.oppo.gallery3d" />
+        <package android:name="com.vivo.gallery" />
+    </queries>
+
     <application
         android:name="com.jiangdg.ausbc.base.BaseApplication"
         android:allowBackup="true"
@@ -26,11 +48,13 @@
 
         <activity
             android:name=".presentation.activity.MainActivity"
-            android:exported="false" />
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize" />
 
         <activity
             android:name=".presentation.activity.SplashActivity"
             android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"
             android:theme="@style/Theme.Digitapp">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
