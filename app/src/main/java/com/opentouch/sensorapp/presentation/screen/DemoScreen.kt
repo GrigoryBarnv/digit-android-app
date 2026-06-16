@@ -1,6 +1,9 @@
 package com.opentouch.sensorapp.presentation.screen
 
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.drawable.BitmapDrawable
 import android.view.View
 import android.widget.Toast
 import androidx.compose.animation.core.animateFloatAsState
@@ -10,15 +13,20 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -26,8 +34,12 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -40,6 +52,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
@@ -57,12 +71,18 @@ import com.opentouch.sensorapp.presentation.component.SensorPreviewShape
 import com.opentouch.sensorapp.presentation.fragment.CameraPreviewFragment
 import kotlin.math.roundToInt
 
+private data class GalleryApp(val label: String, val intent: Intent, val icon: Bitmap?)
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DemoScreen() {
     val red = remember { mutableFloatStateOf(0f) }
     val green = remember { mutableFloatStateOf(0f) }
     val blue = remember { mutableFloatStateOf(0f) }
     var showRgbControls by remember { mutableStateOf(false) }
+    // Gallery bottom sheet
+    var galleryApps by remember { mutableStateOf<List<GalleryApp>>(emptyList()) }
+    val gallerySheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var cameraFragment by remember { mutableStateOf<CameraPreviewFragment?>(null) }
     val cameraContainerId = remember { View.generateViewId() }
     val cameraFragmentTag = "camera_preview_fragment"
@@ -71,6 +91,10 @@ fun DemoScreen() {
     // ── Mode: "photo" or "video" ──────────────────────────────────────────────
     var isVideoMode by remember { mutableStateOf(false) }
     var showModeMenu by remember { mutableStateOf(false) }
+
+    // ── AI model selection ────────────────────────────────────────────────────
+    var selectedModel by remember { mutableStateOf("None") }
+    var showModelMenu by remember { mutableStateOf(false) }
 
     // ── Photo: flash overlay ──────────────────────────────────────────────────
     var showFlash by remember { mutableStateOf(false) }
@@ -181,6 +205,7 @@ fun DemoScreen() {
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF1E1E1E))
+            .windowInsetsPadding(WindowInsets.systemBars)
             .padding(12.dp)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -291,23 +316,73 @@ fun DemoScreen() {
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Gallery button — opens the phone's built-in photo gallery.
+                // Gallery button — always shows ALL installed gallery apps so the
+                // user can pick. Two sources are combined:
+                //
+                //  1. CATEGORY_APP_GALLERY: the standard Android category that
+                //     manufacturer gallery apps (Samsung Gallery, MIUI Gallery,
+                //     OnePlus Gallery, etc.) declare. Each matching app gets its
+                //     own targeted intent so the chooser shows them individually.
+                //
+                //  2. Google Photos: never declares CATEGORY_APP_GALLERY, so we
+                //     add it explicitly via its package name if it's installed.
+                //
+                // Result:
+                //  - Samsung tablet with both apps → chooser lists both
+                //  - Pixel with only Google Photos  → opens Google Photos directly
+                //  - Nothing installed              → toast
                 Button(
                     onClick = {
-                        val intent = Intent(Intent.ACTION_MAIN).apply {
-                            addCategory(Intent.CATEGORY_APP_GALLERY)
-                        }
-                        val chooser = Intent.createChooser(intent, "Open gallery with...").apply {
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                        try {
-                            if (intent.resolveActivity(context.packageManager) != null) {
-                                context.startActivity(chooser)
-                            } else {
-                                Toast.makeText(context, "No gallery app found on this device", Toast.LENGTH_SHORT).show()
+                        val pm = context.packageManager
+                        val seen = mutableSetOf<String>()
+                        val found = mutableListOf<GalleryApp>()
+
+                        fun tryAdd(pkg: String, intent: Intent) {
+                            if (seen.add(pkg)) {
+                                val info = try { pm.getApplicationInfo(pkg, 0) } catch (_: Exception) { return }
+                                val label = pm.getApplicationLabel(info).toString()
+                                val icon = try {
+                                    val drawable = pm.getApplicationIcon(info)
+                                    if (drawable is BitmapDrawable) {
+                                        drawable.bitmap
+                                    } else {
+                                        val bmp = Bitmap.createBitmap(
+                                            drawable.intrinsicWidth.coerceAtLeast(1),
+                                            drawable.intrinsicHeight.coerceAtLeast(1),
+                                            Bitmap.Config.ARGB_8888
+                                        )
+                                        val canvas = Canvas(bmp)
+                                        drawable.setBounds(0, 0, canvas.width, canvas.height)
+                                        drawable.draw(canvas)
+                                        bmp
+                                    }
+                                } catch (_: Exception) { null }
+                                found.add(GalleryApp(label, intent, icon))
                             }
-                        } catch (e: Exception) {
-                            Toast.makeText(context, "Could not open gallery", Toast.LENGTH_SHORT).show()
+                        }
+
+                        // All known gallery packages — check each one directly.
+                        listOf(
+                            "com.sec.android.gallery3d",
+                            "com.samsung.android.app.gallery",
+                            "com.google.android.apps.photos",
+                            "com.google.android.apps.photosgo",
+                            "com.miui.gallery",
+                            "com.asus.gallery",
+                            "com.oneplus.gallery",
+                            "com.oppo.gallery3d",
+                            "com.vivo.gallery",
+                        ).forEach { pkg ->
+                            pm.getLaunchIntentForPackage(pkg)?.let { tryAdd(pkg, it) }
+                        }
+
+                        when {
+                            found.isEmpty() ->
+                                Toast.makeText(context, "No gallery app found", Toast.LENGTH_SHORT).show()
+                            found.size == 1 ->
+                                context.startActivity(found[0].intent)
+                            else ->
+                                galleryApps = found
                         }
                     },
                     modifier = Modifier.weight(1f),
@@ -357,16 +432,42 @@ fun DemoScreen() {
                     }
                 }
 
-                // AI button — placeholder for future on-device ML features.
-                Button(
-                    onClick = {
-                        Toast.makeText(context, "AI features coming soon", Toast.LENGTH_SHORT).show()
-                    },
-                    modifier = Modifier.weight(1f),
-                    contentPadding = actionButtonPadding,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF303030))
-                ) {
-                    Text("🤖 AI", style = actionButtonTextStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                // AI button — opens a dropdown to select an ML model.
+                // "None" means no model is active. More models will be added
+                // once the professor specifies which algorithms to run.
+                Box(modifier = Modifier.weight(1f)) {
+                    Button(
+                        onClick = { showModelMenu = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = actionButtonPadding,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (selectedModel == "None") Color(0xFF303030) else Color(0xFF1A3D1A)
+                        )
+                    ) {
+                        Text(
+                            text = if (selectedModel == "None") "🤖 AI" else "🤖 ${selectedModel}",
+                            style = actionButtonTextStyle,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = showModelMenu,
+                        onDismissRequest = { showModelMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("None") },
+                            onClick = { selectedModel = "None"; showModelMenu = false }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Model 1") },
+                            onClick = { selectedModel = "Model 1"; showModelMenu = false }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Model 2") },
+                            onClick = { selectedModel = "Model 2"; showModelMenu = false }
+                        )
+                    }
                 }
 
                 // Settings button — placeholder, no functionality yet.
@@ -390,15 +491,18 @@ fun DemoScreen() {
                 else -> Color.White
             }
             val captureButtonAlpha = if (!isVideoMode && isCapturing) 0.4f else 1f
-            Box(
+            BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 4.dp),
                 contentAlignment = Alignment.Center
             ) {
+                // Button size: 18% of screen width, clamped between 56dp and 96dp
+                // so it looks right on both phones and tablets.
+                val captureSize = (maxWidth * 0.18f).coerceIn(56.dp, 96.dp)
                 Box(
                     modifier = Modifier
-                        .size(72.dp)
+                        .size(captureSize)
                         .alpha(captureButtonAlpha)
                         .background(captureButtonColor, CircleShape)
                         .border(4.dp, Color(0xFF303030), CircleShape)
@@ -451,6 +555,50 @@ fun DemoScreen() {
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4A4A4A))
                     ) { Text("Apply") }
                 }
+            }
+        }
+
+        // ── Gallery app bottom sheet ────────────────────────────────────────
+        if (galleryApps.isNotEmpty()) {
+            ModalBottomSheet(
+                onDismissRequest = { galleryApps = emptyList() },
+                sheetState = gallerySheetState,
+                containerColor = Color(0xFF2D2D2D),
+            ) {
+                Text(
+                    text = "Open gallery with…",
+                    color = Color.White,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 16.sp,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
+                )
+                HorizontalDivider(color = Color(0xFF3D3D3D))
+                galleryApps.forEach { app ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                galleryApps = emptyList()
+                                context.startActivity(app.intent)
+                            }
+                            .padding(horizontal = 24.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        app.icon?.let { bmp ->
+                            Image(
+                                bitmap = bmp.asImageBitmap(),
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                            )
+                        }
+                        Text(text = app.label, color = Color.White, fontSize = 16.sp)
+                    }
+                    HorizontalDivider(color = Color(0xFF3D3D3D))
+                }
+                Spacer(modifier = Modifier.navigationBarsPadding())
             }
         }
 
