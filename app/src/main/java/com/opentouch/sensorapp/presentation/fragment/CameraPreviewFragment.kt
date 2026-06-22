@@ -605,6 +605,7 @@ class CameraPreviewFragment : CameraFragment() {
         permissionRetryJob?.cancel()
         permissionRetryJob = lifecycleScope.launch {
             delay(initialDelayMs)
+            var permissionRequested = false
             repeat(30) {
                 if (!isAdded || _binding == null) return@launch
                 if (isCameraOpened()) return@launch
@@ -630,17 +631,23 @@ class CameraPreviewFragment : CameraFragment() {
                     }
                     ftdiBootloaderPollCount = 0
 
-                    // A real device is attached. The library automatically
-                    // calls requestPermission() on attach, which shows the
-                    // system "Allow Open Touch to access ...?" dialog — we
-                    // don't need to (and shouldn't) call it again here. Just
-                    // show a waiting message and let the polling loop notice
-                    // once the camera opens (onCameraState will show our
-                    // "sensor supported?" popup right after that).
-                    _binding?.statusText?.text = getString(R.string.camera_detected_requesting_permission)
+                    if (!permissionRequested) {
+                        // First time we see the device — request permission,
+                        // which shows the "Allow Open Touch to access …?" dialog.
+                        _binding?.statusText?.text = getString(R.string.camera_detected_requesting_permission)
+                        requestPermission(firstDevice)
+                        permissionRequested = true
+                    } else {
+                        // Permission was already requested (user either tapped OK
+                        // and the camera is still opening, or tapped Cancel and
+                        // we're re-requesting on the next poll). Show a message
+                        // that reflects the actual state — not "requesting" again.
+                        _binding?.statusText?.text = getString(R.string.camera_detected_requesting_permission)
+                        requestPermission(firstDevice)
+                    }
                 } else {
-                    // No device connected — forget the last one, so plugging the
-                    // same sensor back in later will show the popup again.
+                    // No device connected — reset so the next attach starts fresh.
+                    permissionRequested = false
                     lastDetectedDeviceKey = null
                 }
                 delay(500)
