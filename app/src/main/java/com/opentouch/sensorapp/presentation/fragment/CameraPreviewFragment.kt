@@ -23,8 +23,10 @@ import com.jiangdg.ausbc.MultiCameraClient
 import com.jiangdg.ausbc.base.CameraFragment
 import com.jiangdg.ausbc.camera.CameraUVC
 import com.jiangdg.ausbc.camera.bean.CameraRequest
+import com.jiangdg.ausbc.camera.bean.PreviewSize
 import com.jiangdg.ausbc.callback.ICameraStateCallBack
 import com.jiangdg.ausbc.callback.ICaptureCallBack
+import com.jiangdg.ausbc.callback.IPreviewDataCallBack
 import com.jiangdg.ausbc.render.env.RotateType
 import com.jiangdg.ausbc.utils.Logger
 import com.jiangdg.ausbc.widget.IAspectRatio
@@ -61,6 +63,46 @@ class CameraPreviewFragment : CameraFragment() {
     // being physically unplugged). Read once by onCameraState(CLOSED) to
     // decide whether to show the "Sensor disconnected" + Reconnect UI.
     private var declinedClose = false
+
+    // ─── FPS measurement (read-only display in Settings) ──────────────────────
+    // Counts preview frames between samples. Incremented on the camera thread,
+    // read+reset once per second on the main thread — a single Int write/read is
+    // atomic enough for a display counter, no lock needed.
+    @Volatile
+    private var frameTick = 0
+    private var fpsJob: Job? = null
+
+    // Lightweight frame callback: it does NOT process the bytes, it only counts
+    // frames so we can derive a real, measured FPS for the read-only display.
+    private val fpsCounter = object : IPreviewDataCallBack {
+        override fun onPreviewData(
+            data: ByteArray?,
+            width: Int,
+            height: Int,
+            format: IPreviewDataCallBack.DataFormat
+        ) {
+            frameTick++
+        }
+    }
+
+    private fun startFpsMeasurement() {
+        fpsJob?.cancel()
+        frameTick = 0
+        fpsJob = lifecycleScope.launch {
+            while (isAdded) {
+                delay(1_000)
+                val measured = frameTick
+                frameTick = 0
+                _currentFps.value = measured
+            }
+        }
+    }
+
+    private fun stopFpsMeasurement() {
+        fpsJob?.cancel()
+        fpsJob = null
+        _currentFps.value = 0
+    }
 
     override fun getRootView(inflater: LayoutInflater, container: ViewGroup?): View {
         _binding = FragmentCameraPreviewBinding.inflate(inflater, container, false)
@@ -103,7 +145,7 @@ class CameraPreviewFragment : CameraFragment() {
         // Swap dimensions for 90/270 degree rotations so the preview box
         // becomes portrait-shaped to match the rotated image.
         val isQuarterTurn = SENSOR_ROTATE_TYPE == RotateType.ANGLE_90 ||
-            SENSOR_ROTATE_TYPE == RotateType.ANGLE_270
+                SENSOR_ROTATE_TYPE == RotateType.ANGLE_270
         val width = if (isQuarterTurn) 240 else 320
         val height = if (isQuarterTurn) 320 else 240
 
@@ -144,11 +186,18 @@ class CameraPreviewFragment : CameraFragment() {
                 applyRgb(pendingRed, pendingGreen, pendingBlue)
                 permissionRetryJob?.cancel()
 
-                // The system "Allow Open Touch to access ...?" dialog (shown
-                // automatically when the USB device was attached) has now
-                // been resolved and the camera is streaming. Show the
-                // "is this sensor supported?" popup now, so it appears AFTER
-                // the system dialog instead of at the same time as it.
+                // Start measuring FPS: attach the lightweight frame counter and
+                // begin the once-per-second sampler.
+                getCurrentCamera()?.addPreviewDataCallBack(fpsCounter)
+                startFpsMeasurement()
+
+                // Show the "is this sensor supported?" popup only once per
+                // physical connection. lastDetectedDeviceKey holds the VID:PID
+                // we've already shown a popup for; it is cleared ONLY when the
+                // device list becomes empty (a real unplug), not on the
+                // close/reopen that happens during an app resume. So a resume
+                // with the same sensor still attached finds a matching key and
+                // shows nothing.
                 val device = getDeviceList()?.firstOrNull()
                 if (device != null) {
                     val key = "${device.vendorId}:${device.productId}"
@@ -168,9 +217,13 @@ class CameraPreviewFragment : CameraFragment() {
             }
             ICameraStateCallBack.State.CLOSED -> {
                 statusView.visibility = View.VISIBLE
-                // Forget the device so the "sensor connected" popup shows
-                // again the next time a camera opens for it.
-                lastDetectedDeviceKey = null
+                stopFpsMeasurement()
+                // Dismiss any visible popup, but DO NOT clear
+                // lastDetectedDeviceKey here — otherwise an app-resume reopen
+                // would treat the same sensor as new and re-show the popup.
+                // The key is only reset on a genuine unplug (device list empty),
+                // handled in startPermissionOpenRetry's no-device branch.
+                _detectedDevice.value = null
                 if (declinedClose) {
                     // The user tapped "Cancel" on the sensor popup, which is
                     // what closed the camera. Show a clear "disconnected"
@@ -190,6 +243,7 @@ class CameraPreviewFragment : CameraFragment() {
             }
             ICameraStateCallBack.State.ERROR -> {
                 statusView.visibility = View.VISIBLE
+                stopFpsMeasurement()
                 statusView.text = getString(R.string.camera_error, msg ?: "unknown")
             }
         }
@@ -198,6 +252,11 @@ class CameraPreviewFragment : CameraFragment() {
     override fun onDestroyView() {
         permissionRetryJob?.cancel()
         permissionRetryJob = null
+        stopFpsMeasurement()
+        // Leaving the screen — dismiss any visible popup. Keep
+        // lastDetectedDeviceKey so returning with the same sensor still
+        // attached does NOT re-show the popup.
+        _detectedDevice.value = null
         if (activeInstance === this) activeInstance = null
         _binding = null
         super.onDestroyView()
@@ -231,6 +290,9 @@ class CameraPreviewFragment : CameraFragment() {
         _binding?.reconnectButton?.visibility = View.GONE
         val device = getDeviceList()?.firstOrNull()
         if (device != null) {
+            // Explicit Reconnect tap — allow the popup to show again for this
+            // device by forgetting the previously-shown key.
+            lastDetectedDeviceKey = null
             _binding?.statusText?.text = getString(R.string.camera_detected_requesting_permission)
             requestPermission(device)
         } else {
@@ -252,6 +314,25 @@ class CameraPreviewFragment : CameraFragment() {
         camera.setZoom(intensity)
         val zoomEcho = camera.getZoom()
         Logger.i("CameraPreviewFragment", "applyRgb r=$red g=$green b=$blue intensity=$intensity zoomEcho=$zoomEcho")
+    }
+
+    // ─── Resolution + supported-size helpers (Settings) ───────────────────────
+
+    /**
+     * The preview sizes the CONNECTED sensor actually advertises. For fixed-
+     * format sensors (DIGIT / GelSight Mini) this is typically a single entry.
+     * Returns an empty list if the camera isn't open yet — callers must handle
+     * that.
+     */
+    fun getSupportedSizes(): List<PreviewSize> {
+        if (!isCameraOpened()) return emptyList()
+        return try {
+            // aspectRatio = null → return every advertised size, unfiltered.
+            getCurrentCamera()?.getAllPreviewSizes(null) ?: emptyList()
+        } catch (e: Exception) {
+            Logger.e("CameraPreviewFragment", "getAllPreviewSizes failed: ${e.message}")
+            emptyList()
+        }
     }
 
     /**
@@ -621,7 +702,7 @@ class CameraPreviewFragment : CameraFragment() {
                     // ~6 seconds, fall through as normal (so a genuinely
                     // stuck-in-DFU sensor doesn't hang forever).
                     val isTransientBootloader = firstDevice.vendorId == FTDI_BOOTLOADER_VENDOR_ID &&
-                        firstDevice.productId == FT900_DFU_PRODUCT_ID
+                            firstDevice.productId == FT900_DFU_PRODUCT_ID
                     if (isTransientBootloader && ftdiBootloaderPollCount < 12) {
                         ftdiBootloaderPollCount++
                         _binding?.statusText?.text = getString(R.string.camera_waiting_for_device)
@@ -646,9 +727,12 @@ class CameraPreviewFragment : CameraFragment() {
                         requestPermission(firstDevice)
                     }
                 } else {
-                    // No device connected — reset so the next attach starts fresh.
+                    // No device connected (genuine unplug) — reset so the next
+                    // physical connection shows the popup again, and clear the
+                    // popup state so it can't show with nothing attached.
                     permissionRequested = false
                     lastDetectedDeviceKey = null
+                    _detectedDevice.value = null
                 }
                 delay(500)
             }
@@ -693,8 +777,14 @@ class CameraPreviewFragment : CameraFragment() {
         private val _detectedDevice = mutableStateOf<DetectedDevice?>(null)
         val detectedDevice: State<DetectedDevice?> get() = _detectedDevice
 
-        // VID:PID of the last device we reported, so we don't spam the popup
-        // every poll cycle while waiting for permission/connection.
+        // Live-measured preview frame rate, sampled once per second by the
+        // active fragment. DemoScreen reads this for the read-only FPS display.
+        private val _currentFps = mutableStateOf(0)
+        val currentFps: State<Int> get() = _currentFps
+
+        // VID:PID of the last device we showed the popup for. Reset only on a
+        // genuine unplug (device list empty) — NOT on the close/reopen of an
+        // app resume — so the popup shows once per physical connection.
         private var lastDetectedDeviceKey: String? = null
 
         // Bumped every time a device is (re)detected — see DetectedDevice.sequence.
@@ -726,6 +816,10 @@ class CameraPreviewFragment : CameraFragment() {
         fun pushRgb(red: Int, green: Int, blue: Int) {
             activeInstance?.applyRgb(red, green, blue)
         }
+
+        /** Sizes the connected sensor supports. Empty if no camera is open. */
+        fun supportedSizes(): List<PreviewSize> =
+            activeInstance?.getSupportedSizes() ?: emptyList()
 
         fun requestCapture(onDone: (success: Boolean, path: String?) -> Unit): Boolean {
             val instance = activeInstance ?: return false

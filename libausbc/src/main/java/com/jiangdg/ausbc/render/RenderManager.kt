@@ -429,7 +429,6 @@ class RenderManager(
         mRenderCodecThread = null
         mRenderCodecHandler = null
     }
-
     private fun saveImageInternal(savePath: String?) {
         if (mCaptureState.get()) {
             return
@@ -441,59 +440,138 @@ class RenderManager(
         val date = mDateFormat.format(System.currentTimeMillis())
         val title = savePath ?: "IMG_AUSBC_$date"
         val displayName = savePath ?: "$title.jpg"
-        val path = savePath ?: "$mCameraDir/$displayName"
         val width = mWidth
         val height = mHeight
 
-        var fos: FileOutputStream? = null
         try {
-            fos = FileOutputStream(path)
-            GLBitmapUtils.transFrameBufferToBitmap(mFBOBufferId, width, height).apply {
-                compress(Bitmap.CompressFormat.JPEG, 100, fos)
-                recycle()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // Android 10+ — use MediaStore API
+                val values = ContentValues().apply {
+                    put(MediaStore.Images.ImageColumns.TITLE, title)
+                    put(MediaStore.Images.ImageColumns.DISPLAY_NAME, displayName)
+                    put(MediaStore.Images.ImageColumns.DATE_TAKEN, date)
+                    put(MediaStore.Images.ImageColumns.WIDTH, width)
+                    put(MediaStore.Images.ImageColumns.HEIGHT, height)
+                    put(MediaStore.Images.ImageColumns.MIME_TYPE, "image/jpeg")
+                    put(MediaStore.Images.ImageColumns.RELATIVE_PATH, "DCIM/Camera")
+                    put(MediaStore.Images.ImageColumns.IS_PENDING, 1)
+                }
+
+                val uri = mContext.contentResolver.insert(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values
+                ) ?: throw IOException("Failed to create MediaStore entry")
+
+                mContext.contentResolver.openOutputStream(uri)?.use { fos ->
+                    GLBitmapUtils.transFrameBufferToBitmap(mFBOBufferId, width, height).apply {
+                        compress(Bitmap.CompressFormat.JPEG, 100, fos)
+                        recycle()
+                    }
+                }
+
+                // Mark file as complete
+                values.clear()
+                values.put(MediaStore.Images.ImageColumns.IS_PENDING, 0)
+                mContext.contentResolver.update(uri, values, null, null)
+
+                mMainHandler.post {
+                    mCaptureDataCb?.onComplete(uri.toString())
+                }
+            } else {
+                // Android 9 and below — use file path
+                val path = "$mCameraDir/$displayName"
+                FileOutputStream(path).use { fos ->
+                    GLBitmapUtils.transFrameBufferToBitmap(mFBOBufferId, width, height).apply {
+                        compress(Bitmap.CompressFormat.JPEG, 100, fos)
+                        recycle()
+                    }
+                }
+                val values = ContentValues().apply {
+                    put(MediaStore.Images.ImageColumns.TITLE, title)
+                    put(MediaStore.Images.ImageColumns.DISPLAY_NAME, displayName)
+                    put(MediaStore.Images.ImageColumns.DATE_TAKEN, date)
+                    put(MediaStore.Images.ImageColumns.WIDTH, width)
+                    put(MediaStore.Images.ImageColumns.HEIGHT, height)
+                    put(MediaStore.Images.ImageColumns.DATA, path)
+                }
+                mContext.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                mMainHandler.post {
+                    mCaptureDataCb?.onComplete(path)
+                }
             }
-        } catch (e: IOException) {
+        } catch (e: Exception) {
             mMainHandler.post {
                 mCaptureDataCb?.onError(e.localizedMessage)
             }
-            Logger.e(TAG, "Failed to write file, err = ${e.localizedMessage}", e)
+            Logger.e(TAG, "Failed to save image, err = ${e.localizedMessage}", e)
         } finally {
-            try {
-                fos?.close()
-            } catch (e: IOException) {
-                Logger.e(TAG, "Failed to write file, err = ${e.localizedMessage}", e)
-            }
-        }
-        //Judge whether it is saved successfully
-        //Update gallery if successful
-        val file = File(path)
-        if (file.length() == 0L) {
-            Logger.e(TAG, "Failed to save file $path")
-            file.delete()
             mCaptureState.set(false)
-            return
-        }
-        val values = ContentValues()
-        values.put(MediaStore.Images.ImageColumns.TITLE, title)
-        values.put(MediaStore.Images.ImageColumns.DISPLAY_NAME, displayName)
-        values.put(MediaStore.Images.ImageColumns.DATE_TAKEN, date)
-        values.put(MediaStore.Images.ImageColumns.WIDTH, width)
-        values.put(MediaStore.Images.ImageColumns.HEIGHT, height)
-        // DATA (_data) column is read-only on Android 10+ (API 29+).
-        // Setting it on modern Android causes an IllegalArgumentException crash.
-        // On Android 9 and below it is still needed so the gallery can find the file.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            values.put(MediaStore.Images.ImageColumns.DATA, path)
-        }
-        mContext.contentResolver?.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-        mMainHandler.post {
-            mCaptureDataCb?.onComplete(path)
-        }
-        mCaptureState.set(false)
-        if (Utils.debugCamera) {
-            Logger.i(TAG, "captureImageInternal save path = $path")
         }
     }
+//
+//    private fun saveImageInternal(savePath: String?) {
+//        if (mCaptureState.get()) {
+//            return
+//        }
+//        mCaptureState.set(true)
+//        mMainHandler.post {
+//            mCaptureDataCb?.onBegin()
+//        }
+//        val date = mDateFormat.format(System.currentTimeMillis())
+//        val title = savePath ?: "IMG_AUSBC_$date"
+//        val displayName = savePath ?: "$title.jpg"
+//        val path = savePath ?: "$mCameraDir/$displayName"
+//        val width = mWidth
+//        val height = mHeight
+//
+//        var fos: FileOutputStream? = null
+//        try {
+//            fos = FileOutputStream(path)
+//            GLBitmapUtils.transFrameBufferToBitmap(mFBOBufferId, width, height).apply {
+//                compress(Bitmap.CompressFormat.JPEG, 100, fos)
+//                recycle()
+//            }
+//        } catch (e: IOException) {
+//            mMainHandler.post {
+//                mCaptureDataCb?.onError(e.localizedMessage)
+//            }
+//            Logger.e(TAG, "Failed to write file, err = ${e.localizedMessage}", e)
+//        } finally {
+//            try {
+//                fos?.close()
+//            } catch (e: IOException) {
+//                Logger.e(TAG, "Failed to write file, err = ${e.localizedMessage}", e)
+//            }
+//        }
+//        //Judge whether it is saved successfully
+//        //Update gallery if successful
+//        val file = File(path)
+//        if (file.length() == 0L) {
+//            Logger.e(TAG, "Failed to save file $path")
+//            file.delete()
+//            mCaptureState.set(false)
+//            return
+//        }
+//        val values = ContentValues()
+//        values.put(MediaStore.Images.ImageColumns.TITLE, title)
+//        values.put(MediaStore.Images.ImageColumns.DISPLAY_NAME, displayName)
+//        values.put(MediaStore.Images.ImageColumns.DATE_TAKEN, date)
+//        values.put(MediaStore.Images.ImageColumns.WIDTH, width)
+//        values.put(MediaStore.Images.ImageColumns.HEIGHT, height)
+//        // DATA (_data) column is read-only on Android 10+ (API 29+).
+//        // Setting it on modern Android causes an IllegalArgumentException crash.
+//        // On Android 9 and below it is still needed so the gallery can find the file.
+//        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+//            values.put(MediaStore.Images.ImageColumns.DATA, path)
+//        }
+//        mContext.contentResolver?.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+//        mMainHandler.post {
+//            mCaptureDataCb?.onComplete(path)
+//        }
+//        mCaptureState.set(false)
+//        if (Utils.debugCamera) {
+//            Logger.i(TAG, "captureImageInternal save path = $path")
+//        }
+//    }
 
     private fun emitFrameRate() {
         mFrameRate++

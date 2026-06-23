@@ -66,6 +66,7 @@ import androidx.fragment.app.FragmentActivity
 import androidx.fragment.app.FragmentContainerView
 import androidx.fragment.app.commit
 import com.opentouch.sensorapp.data.SupportedSensors
+import com.opentouch.sensorapp.data.SensorMatchType
 import com.opentouch.sensorapp.presentation.component.RgbControls
 import com.opentouch.sensorapp.presentation.component.SensorPreviewShape
 import com.opentouch.sensorapp.presentation.fragment.CameraPreviewFragment
@@ -96,6 +97,11 @@ fun DemoScreen() {
     var selectedModel by remember { mutableStateOf("None") }
     var showModelMenu by remember { mutableStateOf(false) }
 
+    // ── Settings menu (FPS / RGB / Resolution) ────────────────────────────────
+    var showSettingsMenu by remember { mutableStateOf(false) }
+    // Live-measured FPS coming from the camera fragment (read-only display).
+    val currentFps = CameraPreviewFragment.currentFps.value
+
     // ── Photo: flash overlay ──────────────────────────────────────────────────
     var showFlash by remember { mutableStateOf(false) }
     val flashAlpha by animateFloatAsState(
@@ -114,8 +120,6 @@ fun DemoScreen() {
     var isCapturing by remember { mutableStateOf(false) }
 
     // ── USB sensor connection popup ────────────────────────────────────────────
-    // Shows the detected sensor's name/IDs and whether it's a supported model,
-    // whenever a new USB device is detected by CameraPreviewFragment.
     val detectedDevice = CameraPreviewFragment.detectedDevice.value
     var dismissedSequence by remember { mutableIntStateOf(0) }
 
@@ -123,7 +127,6 @@ fun DemoScreen() {
     var isRecording by remember { mutableStateOf(false) }
     var recordingSeconds by remember { mutableIntStateOf(0) }
 
-    // Tick the timer up every second while recording.
     LaunchedEffect(isRecording) {
         if (isRecording) {
             recordingSeconds = 0
@@ -136,7 +139,6 @@ fun DemoScreen() {
         }
     }
 
-    // Format seconds → "MM:SS"
     fun formatTimer(seconds: Int): String {
         val m = seconds / 60
         val s = seconds % 60
@@ -147,7 +149,6 @@ fun DemoScreen() {
     fun onCaptureClicked() {
         if (isVideoMode) {
             if (!isRecording) {
-                // Start recording
                 val started = CameraPreviewFragment.requestStartRecording(
                     onStarted = { isRecording = true },
                     onDone = { success, path ->
@@ -163,11 +164,9 @@ fun DemoScreen() {
                     Toast.makeText(context, "Camera not ready", Toast.LENGTH_SHORT).show()
                 }
             } else {
-                // Stop recording — onDone above fires once the file is finalised
                 CameraPreviewFragment.requestStopRecording()
             }
         } else {
-            // Photo mode
             if (isCapturing) return
             isCapturing = true
 
@@ -189,14 +188,13 @@ fun DemoScreen() {
 
     fun uiToLed(value: Float): Int {
         val normalized = ((value + 50f) / 100f).coerceIn(0f, 1f)
-        return (normalized * 15f).roundToInt().coerceIn(0, 15) //Convert to LED Scale
+        return (normalized * 15f).roundToInt().coerceIn(0, 15)
     }
 
     fun applyRgbToCamera(r: Float, g: Float, b: Float) {
         CameraPreviewFragment.pushRgb(uiToLed(r), uiToLed(g), uiToLed(b))
     }
 
-    // Start from balanced RGB (centered sliders => mid LED values), not all zero.
     LaunchedEffect(Unit) {
         applyRgbToCamera(red.floatValue, green.floatValue, blue.floatValue)
     }
@@ -209,24 +207,19 @@ fun DemoScreen() {
             .padding(12.dp)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            Row(
+            // ── Top bar: centered "Open Touch" title only ──────────────────────
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                contentAlignment = Alignment.Center
             ) {
-                Text("Open Touch", color = Color.White)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = {}, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2D2D2D))) { Text("FPS") }
-                    Button(
-                        onClick = { showRgbControls = !showRgbControls },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (showRgbControls) Color(0xFF4A4A4A) else Color(0xFF2D2D2D)
-                        )
-                    ) { Text("RGB") }
-                    Button(onClick = {}, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2D2D2D))) { Text("MODEL") }
-                }
+                Text(
+                    "Open Touch",
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
             }
 
             val sensorShape = remember { SensorPreviewShape() }
@@ -238,7 +231,6 @@ fun DemoScreen() {
                     .border(1.dp, Color(0xFF3D3D3D), sensorShape)
                     .background(Color.Black, sensorShape)
             ) {
-                // Bridge: embed Fragment-based USB camera preview inside Compose.
                 AndroidView(
                     modifier = Modifier.fillMaxSize(),
                     factory = { context ->
@@ -265,7 +257,6 @@ fun DemoScreen() {
                     }
                 )
 
-                // White flash overlay — appears briefly when a photo is taken.
                 if (flashAlpha > 0f) {
                     Box(
                         modifier = Modifier
@@ -275,10 +266,6 @@ fun DemoScreen() {
                     )
                 }
 
-                // Recording indicator — red dot + timer shown in the dome's
-                // empty space at the top-center of the preview.
-                // (TopStart/TopEnd corners are clipped away by the dome
-                // shape, so the indicator must sit near the top-center.)
                 if (isRecording) {
                     Row(
                         modifier = Modifier
@@ -306,9 +293,6 @@ fun DemoScreen() {
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Row of 4 primary actions: Gallery, Photo/Video, AI, Settings.
-            // Each button shares the row equally so labels never get squeezed
-            // into a multi-line wrap.
             val actionButtonPadding = PaddingValues(horizontal = 2.dp, vertical = 8.dp)
             val actionButtonTextStyle = TextStyle(fontSize = 12.sp)
             Row(
@@ -316,21 +300,7 @@ fun DemoScreen() {
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Gallery button — always shows ALL installed gallery apps so the
-                // user can pick. Two sources are combined:
-                //
-                //  1. CATEGORY_APP_GALLERY: the standard Android category that
-                //     manufacturer gallery apps (Samsung Gallery, MIUI Gallery,
-                //     OnePlus Gallery, etc.) declare. Each matching app gets its
-                //     own targeted intent so the chooser shows them individually.
-                //
-                //  2. Google Photos: never declares CATEGORY_APP_GALLERY, so we
-                //     add it explicitly via its package name if it's installed.
-                //
-                // Result:
-                //  - Samsung tablet with both apps → chooser lists both
-                //  - Pixel with only Google Photos  → opens Google Photos directly
-                //  - Nothing installed              → toast
+                // Gallery button
                 Button(
                     onClick = {
                         val pm = context.packageManager
@@ -361,7 +331,6 @@ fun DemoScreen() {
                             }
                         }
 
-                        // All known gallery packages — check each one directly.
                         listOf(
                             "com.sec.android.gallery3d",
                             "com.samsung.android.app.gallery",
@@ -392,9 +361,7 @@ fun DemoScreen() {
                     Text("🖼️ Gallery", style = actionButtonTextStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
 
-                // Photo/Video button — opens a dropdown to choose Photo or Video.
-                // Ignored while recording (so the user can't switch mid-clip),
-                // but kept visually "enabled" so the label doesn't fade out.
+                // Photo/Video button
                 Box(modifier = Modifier.weight(1f)) {
                     Button(
                         onClick = { if (!isRecording) showModeMenu = true },
@@ -432,9 +399,7 @@ fun DemoScreen() {
                     }
                 }
 
-                // AI button — opens a dropdown to select an ML model.
-                // "None" means no model is active. More models will be added
-                // once the professor specifies which algorithms to run.
+                // AI button
                 Box(modifier = Modifier.weight(1f)) {
                     Button(
                         onClick = { showModelMenu = true },
@@ -470,22 +435,122 @@ fun DemoScreen() {
                     }
                 }
 
-                // Settings button — placeholder, no functionality yet.
-                Button(
-                    onClick = { },
-                    modifier = Modifier.weight(1f),
-                    contentPadding = actionButtonPadding,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF303030))
-                ) {
-                    Text("⚙️ Settings", style = actionButtonTextStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                // Settings button — hosts FPS (read-only), RGB controls, and
+                // Resolution (read-only spec + live device-reported sizes).
+                Box(modifier = Modifier.weight(1f)) {
+                    Button(
+                        onClick = { showSettingsMenu = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = actionButtonPadding,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF303030))
+                    ) {
+                        Text("⚙️ Settings", style = actionButtonTextStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+
+                    DropdownMenu(
+                        expanded = showSettingsMenu,
+                        onDismissRequest = { showSettingsMenu = false }
+                    ) {
+                        // Resolve the connected sensor's spec (if recognized).
+                        val matchedSensor = detectedDevice?.let {
+                            SupportedSensors.classify(it.vendorId, it.productId, it.name).sensor
+                        }
+
+                        // ── FPS — read-only: live measured vs rated spec. ──────
+                        val ratedFps = matchedSensor?.maxFps
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text(
+                                        when {
+                                            ratedFps != null && currentFps > 0 -> "FPS: $currentFps / $ratedFps max"
+                                            ratedFps != null                   -> "FPS: — / $ratedFps max"
+                                            currentFps > 0                     -> "FPS: $currentFps"
+                                            else                               -> "FPS: —"
+                                        }
+                                    )
+                                    // Warn if measured rate is well below spec
+                                    // (<70% of rated) — usually USB/host limited.
+                                    if (ratedFps != null && currentFps in 1 until (ratedFps * 7 / 10)) {
+                                        Text(
+                                            "below rated — check USB/host",
+                                            fontSize = 11.sp,
+                                            color = Color(0xFFE0A030),
+                                        )
+                                    }
+                                }
+                            },
+                            enabled = false,
+                            onClick = { }
+                        )
+
+                        HorizontalDivider()
+
+                        // ── RGB — opens the existing slider overlay panel. ─────
+                        DropdownMenuItem(
+                            text = { Text("RGB controls") },
+                            onClick = {
+                                showSettingsMenu = false
+                                showRgbControls = true
+                            }
+                        )
+
+                        HorizontalDivider()
+
+                        // ── Resolution — read-only: spec + live device sizes. ──
+                        // These sensors are fixed-format, so this is info, not a
+                        // selector. The spec comes from SupportedSensors; the
+                        // live list is what the device actually advertises.
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    if (matchedSensor != null)
+                                        "Resolution: ${matchedSensor.nativeResolution} (native)"
+                                    else
+                                        "Resolution"
+                                )
+                            },
+                            enabled = false,
+                            onClick = { }
+                        )
+
+                        // Live device-reported sizes, listed beneath.
+                        val liveSizes = remember(showSettingsMenu) {
+                            CameraPreviewFragment.supportedSizes()
+                        }
+                        if (liveSizes.isEmpty()) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "   (no sizes reported — connect a sensor)",
+                                        fontSize = 12.sp,
+                                        color = Color(0xFF9A9A9A),
+                                    )
+                                },
+                                enabled = false,
+                                onClick = { }
+                            )
+                        } else {
+                            liveSizes.forEach { size ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            "   • ${size.width}x${size.height}",
+                                            fontSize = 12.sp,
+                                            color = Color(0xFF9A9A9A),
+                                        )
+                                    },
+                                    enabled = false,
+                                    onClick = { }
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Capture / Record button, centered below the action row.
-            // Photo mode: white circle, dims while capturing.
-            // Video mode: white circle normally, red circle while recording.
             val captureButtonColor = when {
                 isVideoMode && isRecording -> Color.Red
                 else -> Color.White
@@ -497,8 +562,6 @@ fun DemoScreen() {
                     .padding(bottom = 4.dp),
                 contentAlignment = Alignment.Center
             ) {
-                // Button size: 18% of screen width, clamped between 56dp and 96dp
-                // so it looks right on both phones and tablets.
                 val captureSize = (maxWidth * 0.18f).coerceIn(56.dp, 96.dp)
                 Box(
                     modifier = Modifier
@@ -512,7 +575,6 @@ fun DemoScreen() {
         }
 
         if (showRgbControls) {
-            // RGB controls are shown as an overlay panel, not in main layout flow.
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -543,9 +605,6 @@ fun DemoScreen() {
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Apply button — confirms the current RGB values and
-                    // closes the panel, so the user doesn't need to tap the
-                    // RGB button again separately to dismiss it.
                     Button(
                         onClick = {
                             applyRgbToCamera(red.floatValue, green.floatValue, blue.floatValue)
@@ -602,19 +661,24 @@ fun DemoScreen() {
             }
         }
 
-        // ── "Sensor supported?" popup ───────────────────────────────────────
-        // Appears once whenever a new USB device is detected. Lists which
-        // sensors the app supports, shows the detected sensor and whether it
-        // is on that list, and lets the user Connect (proceed to the USB
-        // permission prompt) or Cancel (skip it for this device).
+        // ── Sensor detection popup ──────────────────────────────────────────
         if (detectedDevice != null && detectedDevice.sequence != dismissedSequence) {
-            val supported = SupportedSensors.find(detectedDevice.vendorId, detectedDevice.productId)
+            val match = SupportedSensors.classify(
+                detectedDevice.vendorId,
+                detectedDevice.productId,
+                detectedDevice.name,
+            )
+            val titleText = when (match.type) {
+                SensorMatchType.KNOWN    -> "Sensor supported"
+                SensorMatchType.PROBABLE -> "Sensor recognized"
+                SensorMatchType.UNKNOWN  -> "Unrecognized sensor"
+            }
             AlertDialog(
                 onDismissRequest = {
                     dismissedSequence = detectedDevice.sequence
                     CameraPreviewFragment.declineConnect()
                 },
-                title = { Text(if (supported != null) "Sensor supported" else "Sensor not supported") },
+                title = { Text(titleText) },
                 text = {
                     Column {
                         Text("Supported sensors:")
@@ -629,10 +693,15 @@ fun DemoScreen() {
                         Text("Vendor ID: 0x%04X (%d)".format(detectedDevice.vendorId, detectedDevice.vendorId))
                         Text("Product ID: 0x%04X (%d)".format(detectedDevice.productId, detectedDevice.productId))
                         Spacer(modifier = Modifier.height(8.dp))
-                        if (supported != null) {
-                            Text("✓ This sensor (${supported.displayName}) is supported.")
-                        } else {
-                            Text("✗ This sensor is not supported by the app.")
+                        when (match.type) {
+                            SensorMatchType.KNOWN ->
+                                Text("✓ This sensor (${match.sensor?.displayName}) is supported.")
+                            SensorMatchType.PROBABLE ->
+                                Text("≈ This looks like a ${match.sensor?.displayName} " +
+                                        "(new hardware revision). It should work — tap Connect.")
+                            SensorMatchType.UNKNOWN ->
+                                Text("This sensor isn't in the recognized list, but it may " +
+                                        "still work. Tap Connect to try it.")
                         }
                     }
                 },
