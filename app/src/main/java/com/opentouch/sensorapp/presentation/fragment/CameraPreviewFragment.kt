@@ -3,6 +3,8 @@ package com.opentouch.sensorapp.presentation.fragment
 import android.Manifest
 import android.content.ContentValues
 import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.media.MediaScannerConnection
 import android.os.Build
 import android.os.Environment
@@ -154,7 +156,7 @@ class CameraPreviewFragment : CameraFragment() {
             .setPreviewHeight(height)
             .setRenderMode(CameraRequest.RenderMode.OPENGL)
             .setDefaultRotateType(SENSOR_ROTATE_TYPE)
-            .setAudioSource(CameraRequest.AudioSource.SOURCE_SYS_MIC)
+
             .setPreviewFormat(CameraRequest.PreviewFormat.FORMAT_MJPEG)
             .setAspectRatioShow(true)
             .setCaptureRawImage(false)
@@ -517,7 +519,42 @@ class CameraPreviewFragment : CameraFragment() {
                         onDone(false, "Photo was not saved (null path)")
                         return@runOnUiThread
                     }
-                    // Step 1: write metadata into the temp file
+                    // Step 1: flip the image vertically to match the live preview.
+                    // scaleY = -1f on the TextureView flips the display but not
+                    // the raw image data — so we flip the saved bitmap here.
+                    // The library may return either a file path or a content://
+                    // URI (Android 10+ MediaStore), so we handle both.
+                    try {
+                        val isContentUri = path.startsWith("content://")
+                        val uri = if (isContentUri) android.net.Uri.parse(path) else null
+                        val bmp = if (uri != null) {
+                            requireContext().contentResolver.openInputStream(uri)
+                                ?.use { BitmapFactory.decodeStream(it) }
+                        } else {
+                            BitmapFactory.decodeFile(path)
+                        }
+                        if (bmp != null) {
+                            val matrix = Matrix().apply { preScale(1f, -1f) }
+                            val flipped = android.graphics.Bitmap.createBitmap(
+                                bmp, 0, 0, bmp.width, bmp.height, matrix, true
+                            )
+                            bmp.recycle()
+                            if (uri != null) {
+                                requireContext().contentResolver.openOutputStream(uri, "rwt")
+                                    ?.use { fos ->
+                                        flipped.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, fos)
+                                    }
+                            } else {
+                                java.io.FileOutputStream(path).use { fos ->
+                                    flipped.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, fos)
+                                }
+                            }
+                            flipped.recycle()
+                        }
+                    } catch (e: Exception) {
+                        Logger.e("CameraPreviewFragment", "flip failed: ${e.message}")
+                    }
+                    // Step 2: write metadata into the temp file
                     writeMetadata(path)
                     // Step 2: move to public Pictures/DIGIT/ folder
                     val fileName = generateFileName()
