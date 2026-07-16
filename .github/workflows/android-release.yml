@@ -2,8 +2,8 @@ name: Android Release APK
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [ "main" ]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -37,8 +37,14 @@ jobs:
       - name: Build release APK
         run: ./gradlew :app:assembleRelease --stacktrace
 
-      - name: Create GitHub Release
+      - name: Prepare APK asset
+        run: cp app/build/outputs/apk/release/*.apk opentouchapp-release.apk
+
+      - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: app/build/outputs/apk/release/*.apk
+          tag_name: latest
+          name: Latest APK
+          target_commitish: ${{ github.sha }}
+          files: opentouchapp-release.apk
           generate_release_notes: true
