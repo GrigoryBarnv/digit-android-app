@@ -27,6 +27,8 @@ data class SupportedSensor(
     val maxFps: Int,
     val nativeWidth: Int,
     val nativeHeight: Int,
+    /** Folder-safe name used for this sensor's subfolder under Pictures/Open_Touch/ and Movies/Open_Touch/. */
+    val folderName: String,
 ) {
     /** Native streaming resolution as "WxH" for display. */
     val nativeResolution: String get() = "${nativeWidth}x${nativeHeight}"
@@ -49,6 +51,7 @@ object SupportedSensors {
             maxFps = 60,           // DIGIT: 60 Hz (Meta spec)
             nativeWidth = 320,     // DIGIT streams 320x240
             nativeHeight = 240,
+            folderName = "Digit",
         ),
         SupportedSensor(
             displayName = "GelSight Mini",
@@ -58,6 +61,7 @@ object SupportedSensors {
             maxFps = 25,           // GelSight Mini: 25 FPS (datasheet)
             nativeWidth = 320,     // streams a downsampled image (~320x240);
             nativeHeight = 240,    // verify against getAllPreviewSizes() at runtime
+            folderName = "GelSightMini",
         ),
     )
 
