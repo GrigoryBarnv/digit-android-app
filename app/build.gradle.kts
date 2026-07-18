@@ -25,6 +25,10 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            // Sign release builds with the auto-generated debug keystore so CI-built
+            // APKs are actually installable. This is fine for internal testing;
+            // switch to a real release keystore before publishing to the Play Store.
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
