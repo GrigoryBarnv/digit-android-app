@@ -5,7 +5,7 @@ Android application for working with an Open Touch USB sensor/camera device.
 The app connects to a supported USB UVC sensor, shows the live camera preview, and lets the user capture photos or videos. It is a standalone Android app: there is no backend server, database, or external API required for normal use.
 
 <p align="center">
-  <a href="https://github.com/lasr-lab/opentouchapp/releases/latest/download/app-release-unsigned.apk">
+  <a href="https://github.com/lasr-lab/opentouchapp/releases/latest/download/OpenTouch-latest.apk">
     <img src="https://img.shields.io/badge/Download-latest%20APK-brightgreen?style=for-the-badge" alt="Download latest APK">
   </a>
 </p>
@@ -64,11 +64,11 @@ Versioned GitHub releases are created from tags:
 ```powershell
 git switch main
 git pull origin main
-git tag v1.1.0
-git push origin v1.1.0
+git tag v1.1.3
+git push origin v1.1.3
 ```
 
-When a `v*` tag is pushed, GitHub Actions builds the release APK and attaches it to the release as `app-release-unsigned.apk`.
+When a `v*` tag is pushed, GitHub Actions builds the release APK and attaches it to the release as `OpenTouch-v<version>.apk` plus a stable `OpenTouch-latest.apk` download asset.
 
 ## Documentation
 

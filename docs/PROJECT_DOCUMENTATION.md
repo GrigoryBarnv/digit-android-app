@@ -69,8 +69,8 @@ Example:
 ```powershell
 git switch main
 git pull origin main
-git tag v1.1.0
-git push origin v1.1.0
+git tag v1.1.3
+git push origin v1.1.3
 ```
 
 GitHub Actions then:
@@ -78,8 +78,8 @@ GitHub Actions then:
 1. checks out the code,
 2. installs Java and Android build tools,
 3. builds `:app:assembleRelease`,
-4. renames the APK to `app-release-unsigned.apk`,
-5. creates a GitHub Release and attaches the APK.
+4. publishes a versioned APK name and a stable `OpenTouch-latest.apk` download asset,
+5. creates a GitHub Release and attaches the APKs.
 
 ## Adding A Supported Sensor
 

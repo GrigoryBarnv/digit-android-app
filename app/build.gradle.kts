@@ -16,8 +16,8 @@ android {
         applicationId = "com.opentouch.sensorapp"
         minSdk = 24
         targetSdk = 36
-        versionCode = 4
-        versionName = "1.1.6"
+        versionCode = 5
+        versionName = "1.1.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

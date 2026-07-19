@@ -46,10 +46,15 @@ jobs:
       - name: Rename APK with version
         run: |
           APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
-          mv "$APK_PATH" "app/build/outputs/apk/release/OpenTouch-v${{ steps.app_version.outputs.version_name }}.apk"
+          VERSIONED_APK="app/build/outputs/apk/release/OpenTouch-v${{ steps.app_version.outputs.version_name }}.apk"
+          LATEST_APK="app/build/outputs/apk/release/OpenTouch-latest.apk"
+          cp "$APK_PATH" "$VERSIONED_APK"
+          cp "$APK_PATH" "$LATEST_APK"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: app/build/outputs/apk/release/*.apk
+          files: |
+            app/build/outputs/apk/release/OpenTouch-v*.apk
+            app/build/outputs/apk/release/OpenTouch-latest.apk
           generate_release_notes: true
