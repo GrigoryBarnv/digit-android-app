@@ -22,9 +22,24 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("internalRelease") {
+            // Fixed, shared keystore for internal testing builds only. Checked into
+            // the repo on purpose so every CI run and every teammate's local build
+            // signs with the SAME key, so app updates always install cleanly instead
+            // of hitting "signature mismatch" errors. NOT for Play Store publishing -
+            // generate and secure a real release keystore before that.
+            storeFile = file("release-debug.keystore")
+            storePassword = "opentouch2026"
+            keyAlias = "opentouchrelease"
+            keyPassword = "opentouch2026"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("internalRelease")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -52,6 +67,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    implementation("androidx.compose.material:material-icons-extended")
     implementation(project(":libausbc"))
     implementation("androidx.exifinterface:exifinterface:1.3.7")
     testImplementation(libs.junit)
