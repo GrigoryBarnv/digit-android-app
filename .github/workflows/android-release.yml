@@ -40,7 +40,7 @@ jobs:
       - name: Read app version
         id: app_version
         run: |
-          VERSION_NAME=$(./gradlew -q :app:printVersionName)
+          VERSION_NAME=$(./gradlew -q :app:printVersionName --console=plain | tail -n 1 | tr -d '\r')
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Rename APK with version
