@@ -26,9 +26,19 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AspectRatio
+import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -36,6 +46,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -55,6 +66,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -73,6 +85,19 @@ import com.opentouch.sensorapp.presentation.fragment.CameraPreviewFragment
 import kotlin.math.roundToInt
 
 private data class GalleryApp(val label: String, val intent: Intent, val icon: Bitmap?)
+
+@Composable
+private fun ActionButtonLabel(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    text: String,
+    style: TextStyle
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(text, style = style, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -222,7 +247,15 @@ fun DemoScreen() {
                 )
             }
 
-            val sensorShape = remember { SensorPreviewShape() }
+            // Shape the preview to match whichever sensor is actually connected:
+            // DIGIT gets the domed/arch shape (its real physical form factor),
+            // GelSight Mini (and anything unrecognized) gets a plain rectangle.
+            val matchedSensor = detectedDevice?.let {
+                SupportedSensors.classify(it.vendorId, it.productId, it.name).sensor
+            }
+            val sensorShape = remember(matchedSensor?.folderName) {
+                if (matchedSensor?.folderName == "Digit") SensorPreviewShape() else RectangleShape
+            }
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -294,7 +327,7 @@ fun DemoScreen() {
             Spacer(modifier = Modifier.height(8.dp))
 
             val actionButtonPadding = PaddingValues(horizontal = 2.dp, vertical = 8.dp)
-            val actionButtonTextStyle = TextStyle(fontSize = 12.sp)
+            val actionButtonTextStyle = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Medium)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -358,7 +391,7 @@ fun DemoScreen() {
                     contentPadding = actionButtonPadding,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF303030))
                 ) {
-                    Text("🖼️ Gallery", style = actionButtonTextStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    ActionButtonLabel(Icons.Filled.PhotoLibrary, "Gallery", actionButtonTextStyle)
                 }
 
                 // Photo/Video button
@@ -371,26 +404,28 @@ fun DemoScreen() {
                             containerColor = if (isVideoMode) Color(0xFF8B0000) else Color(0xFF303030)
                         )
                     ) {
-                        Text(
-                            if (isVideoMode) "🎥 Video" else "📷 Photo",
-                            style = actionButtonTextStyle,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                        ActionButtonLabel(
+                            icon = if (isVideoMode) Icons.Filled.Videocam else Icons.Filled.PhotoCamera,
+                            text = if (isVideoMode) "Video" else "Photo",
+                            style = actionButtonTextStyle
                         )
                     }
                     DropdownMenu(
                         expanded = showModeMenu,
-                        onDismissRequest = { showModeMenu = false }
+                        onDismissRequest = { showModeMenu = false },
+                        containerColor = Color(0xFF2D2D2D)
                     ) {
                         DropdownMenuItem(
-                            text = { Text("📷  Photo") },
+                            text = { Text("Photo", color = Color.White) },
+                            leadingIcon = { Icon(Icons.Filled.PhotoCamera, contentDescription = null, tint = Color.White) },
                             onClick = {
                                 isVideoMode = false
                                 showModeMenu = false
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text("🎥  Video") },
+                            text = { Text("Video", color = Color.White) },
+                            leadingIcon = { Icon(Icons.Filled.Videocam, contentDescription = null, tint = Color.White) },
                             onClick = {
                                 isVideoMode = true
                                 showModeMenu = false
@@ -409,27 +444,27 @@ fun DemoScreen() {
                             containerColor = if (selectedModel == "None") Color(0xFF303030) else Color(0xFF1A3D1A)
                         )
                     ) {
-                        Text(
-                            text = if (selectedModel == "None") "🤖 AI" else "🤖 ${selectedModel}",
-                            style = actionButtonTextStyle,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                        ActionButtonLabel(
+                            icon = Icons.Filled.Memory,
+                            text = if (selectedModel == "None") "AI" else selectedModel,
+                            style = actionButtonTextStyle
                         )
                     }
                     DropdownMenu(
                         expanded = showModelMenu,
-                        onDismissRequest = { showModelMenu = false }
+                        onDismissRequest = { showModelMenu = false },
+                        containerColor = Color(0xFF2D2D2D)
                     ) {
                         DropdownMenuItem(
-                            text = { Text("None") },
+                            text = { Text("None", color = Color.White) },
                             onClick = { selectedModel = "None"; showModelMenu = false }
                         )
                         DropdownMenuItem(
-                            text = { Text("Model 1") },
+                            text = { Text("Model 1", color = Color.White) },
                             onClick = { selectedModel = "Model 1"; showModelMenu = false }
                         )
                         DropdownMenuItem(
-                            text = { Text("Model 2") },
+                            text = { Text("Model 2", color = Color.White) },
                             onClick = { selectedModel = "Model 2"; showModelMenu = false }
                         )
                     }
@@ -444,12 +479,13 @@ fun DemoScreen() {
                         contentPadding = actionButtonPadding,
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF303030))
                     ) {
-                        Text("⚙️ Settings", style = actionButtonTextStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        ActionButtonLabel(Icons.Filled.Settings, "Settings", actionButtonTextStyle)
                     }
 
                     DropdownMenu(
                         expanded = showSettingsMenu,
-                        onDismissRequest = { showSettingsMenu = false }
+                        onDismissRequest = { showSettingsMenu = false },
+                        containerColor = Color(0xFF2D2D2D)
                     ) {
                         // Resolve the connected sensor's spec (if recognized).
                         val matchedSensor = detectedDevice?.let {
@@ -467,7 +503,8 @@ fun DemoScreen() {
                                             ratedFps != null                   -> "FPS: — / $ratedFps max"
                                             currentFps > 0                     -> "FPS: $currentFps"
                                             else                               -> "FPS: —"
-                                        }
+                                        },
+                                        color = Color.White
                                     )
                                     // Warn if measured rate is well below spec
                                     // (<70% of rated) — usually USB/host limited.
@@ -480,6 +517,7 @@ fun DemoScreen() {
                                     }
                                 }
                             },
+                            leadingIcon = { Icon(Icons.Filled.Speed, contentDescription = null, tint = Color.White) },
                             enabled = false,
                             onClick = { }
                         )
@@ -488,7 +526,8 @@ fun DemoScreen() {
 
                         // ── RGB — opens the existing slider overlay panel. ─────
                         DropdownMenuItem(
-                            text = { Text("RGB controls") },
+                            text = { Text("RGB controls", color = Color.White) },
+                            leadingIcon = { Icon(Icons.Filled.Palette, contentDescription = null, tint = Color.White) },
                             onClick = {
                                 showSettingsMenu = false
                                 showRgbControls = true
@@ -507,9 +546,11 @@ fun DemoScreen() {
                                     if (matchedSensor != null)
                                         "Resolution: ${matchedSensor.nativeResolution} (native)"
                                     else
-                                        "Resolution"
+                                        "Resolution",
+                                    color = Color.White
                                 )
                             },
+                            leadingIcon = { Icon(Icons.Filled.AspectRatio, contentDescription = null, tint = Color.White) },
                             enabled = false,
                             onClick = { }
                         )

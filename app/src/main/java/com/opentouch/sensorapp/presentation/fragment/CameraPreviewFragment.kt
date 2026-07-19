@@ -346,8 +346,8 @@ class CameraPreviewFragment : CameraFragment() {
 
     /**
      * Identifies which supported sensor is currently connected, so captures can
-     * be routed into a matching subfolder (Pictures/Open_Touch/Digit,
-     * Pictures/Open_Touch/GelSightMini, ...). Falls back to "Other" if the
+     * be routed into a matching folder (Pictures/Open_Touch_Digit,
+     * Pictures/Open_Touch_GelSightMini, ...). Falls back to "Other" if the
      * connected device doesn't match a known sensor.
      */
     private fun currentSensorFolderName(): String {
@@ -357,17 +357,21 @@ class CameraPreviewFragment : CameraFragment() {
     }
 
     /**
-     * Generates the photo filename in the format: Open_Touch_001_2026-05-29_18-30-45.jpg
+     * Generates the photo filename in the format:
+     * Open_Touch_Digit_001_2026-05-29_18-30-45.jpg
      * The number is based on how many photos already exist in this sensor's
-     * subfolder, so numbering is independent per sensor and always correct
-     * even after the app restarts.
+     * folder, so numbering is independent per sensor and always correct even
+     * after the app restarts. The sensor name is baked into both the folder
+     * AND the filename itself, since the folder structure is lost if a photo
+     * gets shared or exported elsewhere - the filename should stay self-
+     * describing on its own.
      */
     private fun generateFileName(sensorFolder: String): String {
         val existingCount = try {
             val projection = arrayOf(MediaStore.Images.Media._ID)
             val selection =
                 "${MediaStore.Images.Media.RELATIVE_PATH} = ? AND ${MediaStore.Images.Media.DISPLAY_NAME} LIKE ?"
-            val selectionArgs = arrayOf("Pictures/Open_Touch/$sensorFolder/", "Open_Touch_%.jpg")
+            val selectionArgs = arrayOf("Pictures/Open_Touch_$sensorFolder/", "Open_Touch_${sensorFolder}_%.jpg")
             requireContext().contentResolver.query(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                 projection, selection, selectionArgs, null
@@ -377,14 +381,14 @@ class CameraPreviewFragment : CameraFragment() {
         val nextNumber = String.format("%03d", existingCount + 1)
         val datePart = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
         val timePart = SimpleDateFormat("HH-mm-ss", Locale.US).format(Date())
-        return "Open_Touch_${nextNumber}_${datePart}_${timePart}.jpg"
+        return "Open_Touch_${sensorFolder}_${nextNumber}_${datePart}_${timePart}.jpg"
     }
 
     /**
      * Returns a temporary path inside the app's private folder.
      * This works on ALL Android versions with no permissions needed.
-     * We save here first, then move to the public Pictures/Open_Touch/<sensor>/
-     * or Movies/Open_Touch/<sensor>/ folder.
+     * We save here first, then move to the public Pictures/Open_Touch_<sensor>/
+     * or Movies/Open_Touch_<sensor>/ folder.
      */
     private fun getTempPath(extension: String = "jpg"): String? {
         return try {
@@ -420,7 +424,7 @@ class CameraPreviewFragment : CameraFragment() {
 
     /**
      * Moves the photo from the temp private folder to the public
-     * Pictures/Open_Touch/<sensor>/ folder.
+     * Pictures/Open_Touch_<sensor>/ folder.
      * Works on ALL Android versions:
      *   - Android 10+ (API 29+): uses MediaStore API — no extra permission needed.
      *   - Android 9 and below: uses direct file copy — needs WRITE_EXTERNAL_STORAGE permission.
@@ -435,7 +439,7 @@ class CameraPreviewFragment : CameraFragment() {
                 val contentValues = ContentValues().apply {
                     put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
                     put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-                    put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Open_Touch/$sensorFolder")
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Open_Touch_$sensorFolder")
                     // IS_PENDING = 1 means "I'm still writing this file, don't show it yet."
                     // We set it to 0 after the copy is done so the gallery shows it properly.
                     put(MediaStore.Images.Media.IS_PENDING, 1)
@@ -444,9 +448,18 @@ class CameraPreviewFragment : CameraFragment() {
                     MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues
                 ) ?: return null
 
-                // Copy temp file into the MediaStore entry
+                // The capture library sometimes hands back a content:// URI instead
+                // of a plain file path (it can save directly via MediaStore itself,
+                // e.g. into DCIM/Camera with an auto-generated name). Handle both
+                // sources so the photo always ends up copied into our own entry.
+                val isSourceContentUri = tempPath.startsWith("content://")
                 context.contentResolver.openOutputStream(uri)?.use { output ->
-                    File(tempPath).inputStream().use { input -> input.copyTo(output) }
+                    if (isSourceContentUri) {
+                        context.contentResolver.openInputStream(android.net.Uri.parse(tempPath))
+                            ?.use { input -> input.copyTo(output) }
+                    } else {
+                        File(tempPath).inputStream().use { input -> input.copyTo(output) }
+                    }
                 }
 
                 // Mark file as complete — gallery will now show it
@@ -454,13 +467,24 @@ class CameraPreviewFragment : CameraFragment() {
                 contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)
                 context.contentResolver.update(uri, contentValues, null, null)
 
+                // If the source was the library's own stray MediaStore entry, delete
+                // it now that we've copied it into the correctly named/located one -
+                // otherwise the photo would show up twice in the gallery.
+                if (isSourceContentUri) {
+                    try {
+                        context.contentResolver.delete(android.net.Uri.parse(tempPath), null, null)
+                    } catch (e: Exception) {
+                        Logger.e("CameraPreviewFragment", "moveToPublicStorage: could not delete stray source: ${e.message}")
+                    }
+                }
+
                 uri.toString()
             } else {
                 // Android 9 and below — direct file copy.
                 // WRITE_EXTERNAL_STORAGE permission is declared in the manifest for these versions.
                 val destDir = File(
                     Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
-                    "Open_Touch/$sensorFolder"
+                    "Open_Touch_$sensorFolder"
                 )
                 if (!destDir.exists() && !destDir.mkdirs()) {
                     Logger.e("CameraPreviewFragment", "moveToPublicStorage: could not create Open_Touch dir")
@@ -482,13 +506,13 @@ class CameraPreviewFragment : CameraFragment() {
 
     /**
      * Takes a single photo from the USB camera and saves it to
-     * Pictures/Open_Touch/<sensor>/. Works on all Android versions (7 through 14+).
+     * Pictures/Open_Touch_<sensor>/. Works on all Android versions (7 through 14+).
      *
      * Flow:
      *  1. Check storage permission on Android 9 and below
      *  2. Save to a temp private file (always accessible, no permission needed)
      *  3. Write EXIF metadata to the temp file
-     *  4. Move temp file to Pictures/Open_Touch/<sensor>/ using the correct method for the Android version
+     *  4. Move temp file to Pictures/Open_Touch_<sensor>/ using the correct method for the Android version
      *  5. Delete the temp file
      *
      * [onDone] is called on the main thread with:
@@ -573,7 +597,7 @@ class CameraPreviewFragment : CameraFragment() {
                     }
                     // Step 2: write metadata into the temp file
                     writeMetadata(path)
-                    // Step 2: move to public Pictures/Open_Touch/<sensor>/ folder
+                    // Step 2: move to public Pictures/Open_Touch_<sensor>/ folder
                     val sensorFolder = currentSensorFolderName()
                     val fileName = generateFileName(sensorFolder)
                     val finalPath = moveToPublicStorage(path, fileName, sensorFolder)
@@ -585,7 +609,7 @@ class CameraPreviewFragment : CameraFragment() {
                     } else {
                         // moveToPublicStorage failed — photo was saved in temp but we couldn't move it.
                         // Still report success since the image data exists.
-                        Logger.e("CameraPreviewFragment", "Could not move photo to Pictures/Open_Touch/")
+                        Logger.e("CameraPreviewFragment", "Could not move photo to Pictures/Open_Touch_")
                         onDone(true, path)
                     }
                 }
@@ -596,16 +620,19 @@ class CameraPreviewFragment : CameraFragment() {
     // ─── Video recording ──────────────────────────────────────────────────────
 
     /**
-     * Generates a video filename: Open_Touch_VID_001_2026-05-29_18-30-45.mp4
-     * Counter is based on existing videos in this sensor's Movies subfolder, so
-     * numbering is independent per sensor.
+     * Generates a video filename:
+     * Open_Touch_Digit_VID_001_2026-05-29_18-30-45.mp4
+     * Counter is based on existing videos in this sensor's Movies folder, so
+     * numbering is independent per sensor. The sensor name is baked into both
+     * the folder AND the filename, since folder structure is lost if a video
+     * gets shared or exported elsewhere.
      */
     private fun generateVideoFileName(sensorFolder: String): String {
         val existingCount = try {
             val projection = arrayOf(MediaStore.Video.Media._ID)
             val selection =
                 "${MediaStore.Video.Media.RELATIVE_PATH} = ? AND ${MediaStore.Video.Media.DISPLAY_NAME} LIKE ?"
-            val selectionArgs = arrayOf("Movies/Open_Touch/$sensorFolder/", "Open_Touch_VID_%.mp4")
+            val selectionArgs = arrayOf("Movies/Open_Touch_$sensorFolder/", "Open_Touch_${sensorFolder}_VID_%.mp4")
             requireContext().contentResolver.query(
                 MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
                 projection, selection, selectionArgs, null
@@ -615,14 +642,14 @@ class CameraPreviewFragment : CameraFragment() {
         val nextNumber = String.format("%03d", existingCount + 1)
         val datePart = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
         val timePart = SimpleDateFormat("HH-mm-ss", Locale.US).format(Date())
-        return "Open_Touch_VID_${nextNumber}_${datePart}_${timePart}.mp4"
+        return "Open_Touch_${sensorFolder}_VID_${nextNumber}_${datePart}_${timePart}.mp4"
     }
 
     /**
      * Moves a finished video from the temp private folder to
-     * Movies/Open_Touch/<sensor>/. "Movies" is Android's fixed system directory
+     * Movies/Open_Touch_<sensor>/. "Movies" is Android's fixed system directory
      * name for video content (like "Pictures" is for photos) - it can't be
-     * renamed, but the subfolder underneath it is fully our own.
+     * renamed, but the folder name underneath it is fully our own.
      * Android 10+: MediaStore API (no permission needed).
      * Android 9-: direct file copy (needs WRITE_EXTERNAL_STORAGE).
      */
@@ -633,25 +660,41 @@ class CameraPreviewFragment : CameraFragment() {
                 val contentValues = ContentValues().apply {
                     put(MediaStore.Video.Media.DISPLAY_NAME, fileName)
                     put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-                    put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/Open_Touch/$sensorFolder")
+                    put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/Open_Touch_$sensorFolder")
                     put(MediaStore.Video.Media.IS_PENDING, 1)
                 }
                 val uri = context.contentResolver.insert(
                     MediaStore.Video.Media.EXTERNAL_CONTENT_URI, contentValues
                 ) ?: return null
 
+                // Same content:// vs plain-file-path handling as moveToPublicStorage.
+                val isSourceContentUri = tempPath.startsWith("content://")
                 context.contentResolver.openOutputStream(uri)?.use { output ->
-                    File(tempPath).inputStream().use { input -> input.copyTo(output) }
+                    if (isSourceContentUri) {
+                        context.contentResolver.openInputStream(android.net.Uri.parse(tempPath))
+                            ?.use { input -> input.copyTo(output) }
+                    } else {
+                        File(tempPath).inputStream().use { input -> input.copyTo(output) }
+                    }
                 }
 
                 contentValues.clear()
                 contentValues.put(MediaStore.Video.Media.IS_PENDING, 0)
                 context.contentResolver.update(uri, contentValues, null, null)
+
+                if (isSourceContentUri) {
+                    try {
+                        context.contentResolver.delete(android.net.Uri.parse(tempPath), null, null)
+                    } catch (e: Exception) {
+                        Logger.e("CameraPreviewFragment", "moveVideoToPublicStorage: could not delete stray source: ${e.message}")
+                    }
+                }
+
                 uri.toString()
             } else {
                 val destDir = File(
                     Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
-                    "Open_Touch/$sensorFolder"
+                    "Open_Touch_$sensorFolder"
                 )
                 if (!destDir.exists() && !destDir.mkdirs()) {
                     Logger.e("CameraPreviewFragment", "moveVideoToPublicStorage: could not create Open_Touch dir")
@@ -727,7 +770,7 @@ class CameraPreviewFragment : CameraFragment() {
                     if (finalPath != null) {
                         onDone(true, finalPath)
                     } else {
-                        Logger.e("CameraPreviewFragment", "Could not move video to Movies/Open_Touch/")
+                        Logger.e("CameraPreviewFragment", "Could not move video to Movies/Open_Touch_")
                         onDone(true, path) // temp path — video still exists
                     }
                 }
@@ -737,7 +780,7 @@ class CameraPreviewFragment : CameraFragment() {
 
     /**
      * Stops an in-progress recording. onDone from [startVideoRecording] will be called
-     * once the file is finalised and moved to Movies/Open_Touch/<sensor>/.
+     * once the file is finalised and moved to Movies/Open_Touch_<sensor>/.
      */
     fun stopVideoRecording() {
         captureVideoStop()
