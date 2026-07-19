@@ -8,6 +8,7 @@ import android.graphics.Matrix
 import android.media.MediaScannerConnection
 import android.os.Build
 import android.os.Environment
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -41,6 +42,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 // ─── Recording state shared with DemoScreen ──────────────────────────────────
 // DemoScreen observes this to update the UI (red button, timer, toast).
@@ -67,6 +69,17 @@ class CameraPreviewFragment : CameraFragment() {
     // decide whether to show the "Sensor disconnected" + Reconnect UI.
     private var declinedClose = false
 
+    // True while the camera is closed because the user dragged the FPS
+    // slider to 0 ("pause"), as opposed to a real disconnect. Read by
+    // onCameraState(CLOSED) so the auto-reconnect loop does not immediately
+    // reopen the camera while paused.
+    private var pausedForZeroFps = false
+
+    // True while the app is backgrounded (between onPause and onResume).
+    // Guards against onCameraState(CLOSED) restarting the permission-retry
+    // loop as a side effect of the unregister we do in onPause() below.
+    private var isPausedForBackground = false
+
     // ─── FPS measurement (read-only display in Settings) ──────────────────────
     // Counts preview frames between samples. Incremented on the camera thread,
     // read+reset once per second on the main thread — a single Int write/read is
@@ -92,11 +105,25 @@ class CameraPreviewFragment : CameraFragment() {
         fpsJob?.cancel()
         frameTick = 0
         fpsJob = lifecycleScope.launch {
+            // delay(1_000) is not an exact stopwatch - coroutine dispatch
+            // overhead means the real gap between samples can be a little
+            // more or less than 1000ms, which used to make a steady 60fps
+            // stream occasionally read as 61 or 62. Measuring the ACTUAL
+            // elapsed time and dividing by it (frames / real seconds passed)
+            // instead of assuming exactly 1.000s keeps the reading accurate.
+            var lastSampleTime = SystemClock.elapsedRealtime()
             while (isAdded) {
                 delay(1_000)
-                val measured = frameTick
+                val now = SystemClock.elapsedRealtime()
+                val elapsedSeconds = (now - lastSampleTime) / 1000f
+                lastSampleTime = now
+                val frames = frameTick
                 frameTick = 0
-                _currentFps.value = measured
+                _currentFps.value = if (elapsedSeconds > 0f) {
+                    (frames / elapsedSeconds).roundToInt()
+                } else {
+                    frames
+                }
             }
         }
     }
@@ -173,7 +200,37 @@ class CameraPreviewFragment : CameraFragment() {
 
     override fun onResume() {
         super.onResume()
+        if (isPausedForBackground) {
+            // Undo the onPause() teardown below: re-register so the camera
+            // can be detected/opened again now that the app is visible.
+            isPausedForBackground = false
+            registerMultiCamera()
+        }
         startPermissionOpenRetry(initialDelayMs = 250)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Stop polling for USB permission while the app isn't in the
+        // foreground. Without this, the loop started in onResume() keeps
+        // running in the background (the Fragment's view survives a Home
+        // press, only onPause/onStop fire) and keeps calling
+        // requestPermission() every ~500ms, which pops the system "Allow
+        // Open Touch to access DIGIT?" dialog over whatever app the user is
+        // actually using. onResume() restarts the loop when the app is
+        // reopened, so normal in-app behavior is unaffected.
+        permissionRetryJob?.cancel()
+
+        // The library's own USB-attach listener (registered in
+        // registerMultiCamera(), which runs when this screen is created) is
+        // a SEPARATE mechanism from the polling loop above: it auto-requests
+        // permission the instant a matching USB device is (re)detected, and
+        // is normally only torn down when the screen is destroyed - not
+        // merely backgrounded. So it kept popping the same system dialog in
+        // the background even after the fix above. Unregistering it here,
+        // and re-registering in onResume(), closes that gap too.
+        isPausedForBackground = true
+        unRegisterMultiCamera()
     }
 
     override fun onCameraState(
@@ -208,14 +265,25 @@ class CameraPreviewFragment : CameraFragment() {
                         lastDetectedDeviceKey = key
                         detectionSequence++
                         _connectDecision = ConnectDecision.NONE
-                        _detectedDevice.value = DetectedDevice(
-                            name = device.productName?.takeIf { it.isNotBlank() }
-                                ?: "Unknown USB device",
-                            vendorId = device.vendorId,
-                            productId = device.productId,
-                            sequence = detectionSequence
-                        )
+                        // New physical sensor - forget any FPS choice made
+                        // for a previously connected sensor.
+                        _targetFps.value = null
                     }
+                    // Always refresh detectedDevice while a sensor is attached
+                    // and the camera is open - even on an internal reopen with
+                    // the SAME device (e.g. after an FPS change), where the key
+                    // above is unchanged. Other UI (preview shape, FPS panel)
+                    // depends on this being non-null whenever a sensor is
+                    // connected. detectionSequence only increments in the
+                    // branch above, so the "is this sensor supported?" popup
+                    // still fires only once per physical connection.
+                    _detectedDevice.value = DetectedDevice(
+                        name = device.productName?.takeIf { it.isNotBlank() }
+                            ?: "Unknown USB device",
+                        vendorId = device.vendorId,
+                        productId = device.productId,
+                        sequence = detectionSequence
+                    )
                 }
             }
             ICameraStateCallBack.State.CLOSED -> {
@@ -235,13 +303,25 @@ class CameraPreviewFragment : CameraFragment() {
                     declinedClose = false
                     statusView.text = getString(R.string.sensor_disconnected_declined)
                     _binding?.reconnectButton?.visibility = View.VISIBLE
+                } else if (pausedForZeroFps) {
+                    // Closed on purpose because the FPS slider was set to 0.
+                    // Do NOT auto-reopen — show a paused state with a
+                    // Reconnect button the user can tap to resume (moving
+                    // the slider off 0 also resumes, via changePreviewFps).
+                    statusView.text = "Preview paused (FPS set to 0)"
+                    _binding?.reconnectButton?.visibility = View.VISIBLE
                 } else {
                     // The sensor was unplugged (or the camera otherwise
                     // closed for some other reason). Resume looking for a
                     // device.
                     statusView.text = getString(R.string.camera_disconnected)
                     _binding?.reconnectButton?.visibility = View.GONE
-                    startPermissionOpenRetry(initialDelayMs = 500)
+                    // Don't restart the retry loop if this close was a side
+                    // effect of onPause()'s unregister (app backgrounded) -
+                    // onResume() will restart it when the app comes back.
+                    if (!isPausedForBackground) {
+                        startPermissionOpenRetry(initialDelayMs = 500)
+                    }
                 }
             }
             ICameraStateCallBack.State.ERROR -> {
@@ -291,6 +371,7 @@ class CameraPreviewFragment : CameraFragment() {
      */
     private fun onReconnectClicked() {
         _binding?.reconnectButton?.visibility = View.GONE
+        pausedForZeroFps = false
         val device = getDeviceList()?.firstOrNull()
         if (device != null) {
             // Explicit Reconnect tap — allow the popup to show again for this
@@ -317,6 +398,32 @@ class CameraPreviewFragment : CameraFragment() {
         camera.setZoom(intensity)
         val zoomEcho = camera.getZoom()
         Logger.i("CameraPreviewFragment", "applyRgb r=$red g=$green b=$blue intensity=$intensity zoomEcho=$zoomEcho")
+    }
+
+    /**
+     * Changes the requested preview frame rate. The underlying camera
+     * library only applies a new FPS value the next time the stream is
+     * opened, not while it's already running — so this closes the camera
+     * and lets the existing auto-reconnect flow (the same one already used
+     * when the sensor is unplugged/replugged, or the app resumes) reopen it
+     * at the new rate. A [fps] of 0 pauses the preview instead of reopening.
+     */
+    fun changePreviewFps(fps: Int) {
+        _targetFps.value = fps
+        if (fps <= 0) {
+            pausedForZeroFps = true
+            if (isCameraOpened()) closeCamera()
+            return
+        }
+        pausedForZeroFps = false
+        setFps(fps)
+        if (isCameraOpened()) {
+            // Triggers onCameraState(CLOSED) -> pausedForZeroFps is false,
+            // so the normal auto-reconnect path reopens at the new fps.
+            closeCamera()
+        }
+        // If the camera isn't open yet, nothing more to do — setFps()
+        // already updated the value the next natural open will use.
     }
 
     // ─── Resolution + supported-size helpers (Settings) ───────────────────────
@@ -886,6 +993,14 @@ class CameraPreviewFragment : CameraFragment() {
         private val _currentFps = mutableStateOf(0)
         val currentFps: State<Int> get() = _currentFps
 
+        // The FPS the user has requested via the Settings slider. Null means
+        // "no explicit choice yet" - DemoScreen falls back to the connected
+        // sensor's rated max in that case. Reset to null whenever a new
+        // sensor is detected so a leftover value from a previous sensor
+        // (e.g. 60 from a DIGIT) can't be carried over to a different one.
+        private val _targetFps = mutableStateOf<Int?>(null)
+        val targetFps: State<Int?> get() = _targetFps
+
         // VID:PID of the last device we showed the popup for. Reset only on a
         // genuine unplug (device list empty) — NOT on the close/reopen of an
         // app resume — so the popup shows once per physical connection.
@@ -919,6 +1034,11 @@ class CameraPreviewFragment : CameraFragment() {
 
         fun pushRgb(red: Int, green: Int, blue: Int) {
             activeInstance?.applyRgb(red, green, blue)
+        }
+
+        /** Requests a new preview FPS (0 pauses the preview). See [changePreviewFps]. */
+        fun requestSetFps(fps: Int) {
+            activeInstance?.changePreviewFps(fps)
         }
 
         /** Sizes the connected sensor supports. Empty if no camera is open. */

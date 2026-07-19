@@ -11,6 +11,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -23,6 +25,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
@@ -48,6 +51,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -99,6 +104,45 @@ private fun ActionButtonLabel(
     }
 }
 
+/**
+ * A stepped (0 / half / max) FPS slider that shows a floating value bubble
+ * above the thumb while it's being dragged, tracking the thumb's horizontal
+ * position - similar to Android's native brightness/volume sliders.
+ */
+@Composable
+private fun FpsSliderWithLabel(value: Float, onValueChange: (Float) -> Unit, maxFps: Int) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isDragged by interactionSource.collectIsDraggedAsState()
+    val fraction = (value / maxFps.toFloat()).coerceIn(0f, 1f)
+
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        if (isDragged) {
+            val bubbleOffsetX = (maxWidth - 40.dp) * fraction
+            Box(
+                modifier = Modifier
+                    .offset(x = bubbleOffsetX, y = (-32).dp)
+                    .background(Color(0xFF4A4A4A), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 10.dp, vertical = 4.dp)
+            ) {
+                Text("${value.roundToInt()}", color = Color.White, fontSize = 13.sp)
+            }
+        }
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = 0f..maxFps.toFloat(),
+            steps = 1,
+            interactionSource = interactionSource,
+            modifier = Modifier.fillMaxWidth(),
+            colors = SliderDefaults.colors(
+                thumbColor = Color(0xFF7F77DD),
+                activeTrackColor = Color(0xFF7F77DD),
+                inactiveTrackColor = Color(0xFFD8D0F5),
+            )
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DemoScreen() {
@@ -106,6 +150,8 @@ fun DemoScreen() {
     val green = remember { mutableFloatStateOf(0f) }
     val blue = remember { mutableFloatStateOf(0f) }
     var showRgbControls by remember { mutableStateOf(false) }
+    var showFpsControls by remember { mutableStateOf(false) }
+    val fpsSlider = remember { mutableFloatStateOf(0f) }
     // Gallery bottom sheet
     var galleryApps by remember { mutableStateOf<List<GalleryApp>>(emptyList()) }
     val gallerySheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -147,6 +193,13 @@ fun DemoScreen() {
     // ── USB sensor connection popup ────────────────────────────────────────────
     val detectedDevice = CameraPreviewFragment.detectedDevice.value
     var dismissedSequence by remember { mutableIntStateOf(0) }
+
+    // Which supported sensor (if any) is currently connected. Hoisted to the
+    // top of the function so both the main layout (preview shape) and the
+    // floating overlays below (FPS controls) can read it.
+    val matchedSensor = detectedDevice?.let {
+        SupportedSensors.classify(it.vendorId, it.productId, it.name).sensor
+    }
 
     // ── Video: recording state + elapsed-time counter ─────────────────────────
     var isRecording by remember { mutableStateOf(false) }
@@ -250,9 +303,6 @@ fun DemoScreen() {
             // Shape the preview to match whichever sensor is actually connected:
             // DIGIT gets the domed/arch shape (its real physical form factor),
             // GelSight Mini (and anything unrecognized) gets a plain rectangle.
-            val matchedSensor = detectedDevice?.let {
-                SupportedSensors.classify(it.vendorId, it.productId, it.name).sensor
-            }
             val sensorShape = remember(matchedSensor?.folderName) {
                 if (matchedSensor?.folderName == "Digit") SensorPreviewShape() else RectangleShape
             }
@@ -487,12 +537,10 @@ fun DemoScreen() {
                         onDismissRequest = { showSettingsMenu = false },
                         containerColor = Color(0xFF2D2D2D)
                     ) {
-                        // Resolve the connected sensor's spec (if recognized).
-                        val matchedSensor = detectedDevice?.let {
-                            SupportedSensors.classify(it.vendorId, it.productId, it.name).sensor
-                        }
-
-                        // ── FPS — read-only: live measured vs rated spec. ──────
+                        // ── FPS — live measured vs rated spec. Tapping opens the
+                        // FPS controls panel (same pattern as RGB controls below),
+                        // with a stepped slider (0 / half / rated max) and an
+                        // Apply button.
                         val ratedFps = matchedSensor?.maxFps
                         DropdownMenuItem(
                             text = {
@@ -518,8 +566,15 @@ fun DemoScreen() {
                                 }
                             },
                             leadingIcon = { Icon(Icons.Filled.Speed, contentDescription = null, tint = Color.White) },
-                            enabled = false,
-                            onClick = { }
+                            enabled = ratedFps != null,
+                            onClick = {
+                                if (ratedFps != null) {
+                                    fpsSlider.floatValue =
+                                        (CameraPreviewFragment.targetFps.value ?: ratedFps).toFloat()
+                                    showSettingsMenu = false
+                                    showFpsControls = true
+                                }
+                            }
                         )
 
                         HorizontalDivider()
@@ -650,6 +705,59 @@ fun DemoScreen() {
                         onClick = {
                             applyRgbToCamera(red.floatValue, green.floatValue, blue.floatValue)
                             showRgbControls = false
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4A4A4A))
+                    ) { Text("Apply") }
+                }
+            }
+        }
+
+        if (showFpsControls && matchedSensor != null) {
+            val ratedFps = matchedSensor.maxFps
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(bottom = 144.dp)
+                    .background(Color(0xFF262626), RoundedCornerShape(12.dp))
+                    .border(1.dp, Color(0xFF3D3D3D), RoundedCornerShape(12.dp))
+                    .padding(12.dp)
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text("FPS", color = Color.White, fontWeight = FontWeight.Medium)
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    FpsSliderWithLabel(
+                        value = fpsSlider.floatValue,
+                        onValueChange = { fpsSlider.floatValue = it },
+                        maxFps = ratedFps
+                    )
+
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        Text("0", fontSize = 11.sp, color = Color(0xFF9A9A9A), modifier = Modifier.weight(1f))
+                        Text(
+                            "${ratedFps / 2}",
+                            fontSize = 11.sp,
+                            color = Color(0xFF9A9A9A),
+                            modifier = Modifier.weight(1f),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                        Text(
+                            "$ratedFps",
+                            fontSize = 11.sp,
+                            color = Color(0xFF9A9A9A),
+                            modifier = Modifier.weight(1f),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.End
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Button(
+                        onClick = {
+                            CameraPreviewFragment.requestSetFps(fpsSlider.floatValue.roundToInt())
+                            showFpsControls = false
                         },
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4A4A4A))
