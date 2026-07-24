@@ -1,6 +1,6 @@
-# Open Touch
+# OpenTouch Mobile
 
-Android application for working with an Open Touch USB sensor/camera device.
+Android application for working with an OpenTouch USB sensor/camera device.
 
 The app connects to a supported USB UVC sensor, shows the live camera preview, and lets the user capture photos or videos. It is a standalone Android app: there is no backend server, database, or external API required for normal use.
 
