@@ -6,18 +6,24 @@ import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.view.View
 import android.widget.Toast
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -35,7 +41,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AspectRatio
-import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PhotoLibrary
@@ -68,12 +74,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -91,16 +101,71 @@ import kotlin.math.roundToInt
 
 private data class GalleryApp(val label: String, val intent: Intent, val icon: Bitmap?)
 
+/**
+ * Circular bottom-bar button: lilac fill / white icon at rest, and when
+ * [selected] flips to a white fill / lilac icon while growing slightly
+ * (56dp -> 60dp) with a stronger shadow - so the active mode or a chosen
+ * AI model is unmistakable at a glance. Press feedback is a spring
+ * scale-down, matching the shutter button's feel.
+ */
 @Composable
-private fun ActionButtonLabel(
+private fun CircularNavButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
-    text: String,
-    style: TextStyle
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
-        Spacer(modifier = Modifier.width(4.dp))
-        Text(text, style = style, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    val lilac = Color(0xFF594BA0)
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val pressScale by animateFloatAsState(
+        targetValue = if (isPressed) 0.95f else 1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMedium
+        ),
+        label = "navPressScale"
+    )
+    val size by androidx.compose.animation.core.animateDpAsState(
+        targetValue = if (selected) 52.dp else 48.dp,
+        animationSpec = tween(280),
+        label = "navSize"
+    )
+    val elevation by androidx.compose.animation.core.animateDpAsState(
+        targetValue = if (selected) 10.dp else 4.dp,
+        animationSpec = tween(280),
+        label = "navElevation"
+    )
+    val bgColor by androidx.compose.animation.animateColorAsState(
+        targetValue = if (selected) Color.White else lilac,
+        animationSpec = tween(280),
+        label = "navBg"
+    )
+    val iconColor by androidx.compose.animation.animateColorAsState(
+        targetValue = if (selected) lilac else Color.White,
+        animationSpec = tween(280),
+        label = "navIcon"
+    )
+
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            modifier = Modifier
+                .size(size)
+                .graphicsLayer(scaleX = pressScale, scaleY = pressScale)
+                .shadow(elevation, CircleShape)
+                .background(bgColor, CircleShape)
+                .clickable(
+                    interactionSource = interactionSource,
+                    indication = null,
+                    onClick = onClick
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = label, tint = iconColor, modifier = Modifier.size(19.dp))
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(label, fontSize = 11.sp, color = Color(0xFFC9C9CC), maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -135,9 +200,9 @@ private fun FpsSliderWithLabel(value: Float, onValueChange: (Float) -> Unit, max
             interactionSource = interactionSource,
             modifier = Modifier.fillMaxWidth(),
             colors = SliderDefaults.colors(
-                thumbColor = Color(0xFF7F77DD),
-                activeTrackColor = Color(0xFF7F77DD),
-                inactiveTrackColor = Color(0xFFD8D0F5),
+                thumbColor = Color(0xFF594BA0),
+                activeTrackColor = Color(0xFF594BA0),
+                inactiveTrackColor = Color(0xFFDDD0EF),
             )
         )
     }
@@ -162,7 +227,6 @@ fun DemoScreen() {
 
     // ── Mode: "photo" or "video" ──────────────────────────────────────────────
     var isVideoMode by remember { mutableStateOf(false) }
-    var showModeMenu by remember { mutableStateOf(false) }
 
     // ── AI model selection ────────────────────────────────────────────────────
     var selectedModel by remember { mutableStateOf("None") }
@@ -293,7 +357,7 @@ fun DemoScreen() {
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    "Open Touch",
+                    "OpenTouch",
                     color = Color.White,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.SemiBold
@@ -301,10 +365,19 @@ fun DemoScreen() {
             }
 
             // Shape the preview to match whichever sensor is actually connected:
-            // DIGIT gets the domed/arch shape (its real physical form factor),
-            // GelSight Mini (and anything unrecognized) gets a plain rectangle.
+            // DIGIT gets the domed/arch shape and GelSight Mini gets a sharp
+            // perfect square - both are their real physical form factors.
+            // Only the "nothing recognized yet" fallback (disconnected, or an
+            // unknown sensor) gets a gently rounded rectangle instead of a
+            // plain sharp square, so it doesn't look out of place next to the
+            // rounded buttons/panels elsewhere in the UI when there's no
+            // physical shape to actually match.
             val sensorShape = remember(matchedSensor?.folderName) {
-                if (matchedSensor?.folderName == "Digit") SensorPreviewShape() else RectangleShape
+                when (matchedSensor?.folderName) {
+                    "Digit" -> SensorPreviewShape()
+                    "GelSightMini" -> RectangleShape
+                    else -> RoundedCornerShape(14.dp)
+                }
             }
             Box(
                 modifier = Modifier
@@ -350,25 +423,33 @@ fun DemoScreen() {
                 }
 
                 if (isRecording) {
+                    val recDotPulse = rememberInfiniteTransition(label = "recDotPulse")
+                    val recDotAlpha by recDotPulse.animateFloat(
+                        initialValue = 1f,
+                        targetValue = 0.25f,
+                        animationSpec = infiniteRepeatable(tween(700), RepeatMode.Reverse),
+                        label = "recDotAlpha"
+                    )
                     Row(
                         modifier = Modifier
                             .align(Alignment.TopCenter)
                             .padding(top = 16.dp)
-                            .background(Color(0x99000000), RoundedCornerShape(6.dp))
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                            .background(Color(0xFFD4362F), RoundedCornerShape(20.dp))
+                            .padding(horizontal = 10.dp, vertical = 5.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(8.dp)
-                                .background(Color.Red, CircleShape)
+                                .size(7.dp)
+                                .alpha(recDotAlpha)
+                                .background(Color.White, CircleShape)
                         )
                         Text(
-                            text = formatTimer(recordingSeconds),
+                            text = "REC ${formatTimer(recordingSeconds)}",
                             color = Color.White,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }
@@ -376,15 +457,22 @@ fun DemoScreen() {
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            val actionButtonPadding = PaddingValues(horizontal = 2.dp, vertical = 8.dp)
-            val actionButtonTextStyle = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF2C2D33), RoundedCornerShape(14.dp))
+                    .padding(horizontal = 12.dp, vertical = 14.dp)
+            ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
+                horizontalArrangement = Arrangement.SpaceAround,
+                verticalAlignment = Alignment.Top
             ) {
                 // Gallery button
-                Button(
+                CircularNavButton(
+                    icon = Icons.Filled.PhotoLibrary,
+                    label = "Gallery",
+                    selected = false,
                     onClick = {
                         val pm = context.packageManager
                         val seen = mutableSetOf<String>()
@@ -436,70 +524,27 @@ fun DemoScreen() {
                             else ->
                                 galleryApps = found
                         }
-                    },
-                    modifier = Modifier.weight(1f),
-                    contentPadding = actionButtonPadding,
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF303030))
-                ) {
-                    ActionButtonLabel(Icons.Filled.PhotoLibrary, "Gallery", actionButtonTextStyle)
-                }
+                    }
+                )
 
-                // Photo/Video button
-                Box(modifier = Modifier.weight(1f)) {
-                    Button(
-                        onClick = { if (!isRecording) showModeMenu = true },
-                        modifier = Modifier.fillMaxWidth(),
-                        contentPadding = actionButtonPadding,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isVideoMode) Color(0xFF8B0000) else Color(0xFF303030)
-                        )
-                    ) {
-                        ActionButtonLabel(
-                            icon = if (isVideoMode) Icons.Filled.Videocam else Icons.Filled.PhotoCamera,
-                            text = if (isVideoMode) "Video" else "Photo",
-                            style = actionButtonTextStyle
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = showModeMenu,
-                        onDismissRequest = { showModeMenu = false },
-                        containerColor = Color(0xFF2D2D2D)
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Photo", color = Color.White) },
-                            leadingIcon = { Icon(Icons.Filled.PhotoCamera, contentDescription = null, tint = Color.White) },
-                            onClick = {
-                                isVideoMode = false
-                                showModeMenu = false
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Video", color = Color.White) },
-                            leadingIcon = { Icon(Icons.Filled.Videocam, contentDescription = null, tint = Color.White) },
-                            onClick = {
-                                isVideoMode = true
-                                showModeMenu = false
-                            }
-                        )
-                    }
-                }
+                // Photo/Video button — a direct tap toggle (no popup needed for
+                // a two-way switch), unlike AI/Settings below which still open
+                // their menus since they have more than two options.
+                CircularNavButton(
+                    icon = if (isVideoMode) Icons.Filled.Videocam else Icons.Filled.PhotoCamera,
+                    label = if (isVideoMode) "Video" else "Photo",
+                    selected = isVideoMode,
+                    onClick = { if (!isRecording) isVideoMode = !isVideoMode }
+                )
 
                 // AI button
-                Box(modifier = Modifier.weight(1f)) {
-                    Button(
-                        onClick = { showModelMenu = true },
-                        modifier = Modifier.fillMaxWidth(),
-                        contentPadding = actionButtonPadding,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (selectedModel == "None") Color(0xFF303030) else Color(0xFF1A3D1A)
-                        )
-                    ) {
-                        ActionButtonLabel(
-                            icon = Icons.Filled.Memory,
-                            text = if (selectedModel == "None") "AI" else selectedModel,
-                            style = actionButtonTextStyle
-                        )
-                    }
+                Box {
+                    CircularNavButton(
+                        icon = Icons.Filled.AutoAwesome,
+                        label = if (selectedModel == "None") "AI" else selectedModel,
+                        selected = selectedModel != "None",
+                        onClick = { showModelMenu = true }
+                    )
                     DropdownMenu(
                         expanded = showModelMenu,
                         onDismissRequest = { showModelMenu = false },
@@ -522,15 +567,13 @@ fun DemoScreen() {
 
                 // Settings button — hosts FPS (read-only), RGB controls, and
                 // Resolution (read-only spec + live device-reported sizes).
-                Box(modifier = Modifier.weight(1f)) {
-                    Button(
-                        onClick = { showSettingsMenu = true },
-                        modifier = Modifier.fillMaxWidth(),
-                        contentPadding = actionButtonPadding,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF303030))
-                    ) {
-                        ActionButtonLabel(Icons.Filled.Settings, "Settings", actionButtonTextStyle)
-                    }
+                Box {
+                    CircularNavButton(
+                        icon = Icons.Filled.Settings,
+                        label = "Settings",
+                        selected = false,
+                        onClick = { showSettingsMenu = true }
+                    )
 
                     DropdownMenu(
                         expanded = showSettingsMenu,
@@ -572,6 +615,7 @@ fun DemoScreen() {
                                     fpsSlider.floatValue =
                                         (CameraPreviewFragment.targetFps.value ?: ratedFps).toFloat()
                                     showSettingsMenu = false
+                                    showRgbControls = false
                                     showFpsControls = true
                                 }
                             }
@@ -585,6 +629,7 @@ fun DemoScreen() {
                             leadingIcon = { Icon(Icons.Filled.Palette, contentDescription = null, tint = Color.White) },
                             onClick = {
                                 showSettingsMenu = false
+                                showFpsControls = false
                                 showRgbControls = true
                             }
                         )
@@ -647,11 +692,51 @@ fun DemoScreen() {
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            val captureButtonColor = when {
-                isVideoMode && isRecording -> Color.Red
-                else -> Color.White
-            }
             val captureButtonAlpha = if (!isVideoMode && isCapturing) 0.4f else 1f
+            val isRecordingPulse = isVideoMode && isRecording
+
+            // Fingerprint gradient used on the shutter ring, matching the app icon.
+            val fingerprintRingBrush = remember {
+                Brush.sweepGradient(
+                    listOf(
+                        Color(0xFF3FC4E8),
+                        Color(0xFF7FD18F),
+                        Color(0xFFE8D24A),
+                        Color(0xFFF0923F),
+                        Color(0xFFE8443F),
+                        Color(0xFF3FC4E8),
+                    )
+                )
+            }
+
+            // Press feedback: inner disc springs down slightly, with a haptic tick.
+            val captureInteractionSource = remember { MutableInteractionSource() }
+            val isCapturePressed by captureInteractionSource.collectIsPressedAsState()
+            val capturePressScale by animateFloatAsState(
+                targetValue = if (isCapturePressed) 0.86f else 1f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessMedium
+                ),
+                label = "capturePressScale"
+            )
+            val haptics = LocalHapticFeedback.current
+
+            // Recording glow: a soft ring that expands and fades outward, looping.
+            val recordPulse = rememberInfiniteTransition(label = "recordPulse")
+            val recordPulseScale by recordPulse.animateFloat(
+                initialValue = 1f,
+                targetValue = 1.4f,
+                animationSpec = infiniteRepeatable(tween(1600), RepeatMode.Restart),
+                label = "recordPulseScale"
+            )
+            val recordPulseAlpha by recordPulse.animateFloat(
+                initialValue = 0.55f,
+                targetValue = 0f,
+                animationSpec = infiniteRepeatable(tween(1600), RepeatMode.Restart),
+                label = "recordPulseAlpha"
+            )
+
             BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -659,14 +744,58 @@ fun DemoScreen() {
                 contentAlignment = Alignment.Center
             ) {
                 val captureSize = (maxWidth * 0.18f).coerceIn(56.dp, 96.dp)
+                val ringGapSize = captureSize * 0.86f
+                val discSize = captureSize * 0.66f
+
                 Box(
-                    modifier = Modifier
-                        .size(captureSize)
-                        .alpha(captureButtonAlpha)
-                        .background(captureButtonColor, CircleShape)
-                        .border(4.dp, Color(0xFF303030), CircleShape)
-                        .clickable(enabled = !isCapturing) { onCaptureClicked() }
-                )
+                    modifier = Modifier.size(captureSize),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (isRecordingPulse) {
+                        // Soft glow pulsing outward from the red disc.
+                        Box(
+                            modifier = Modifier
+                                .size(discSize)
+                                .graphicsLayer(
+                                    scaleX = recordPulseScale,
+                                    scaleY = recordPulseScale,
+                                    alpha = recordPulseAlpha
+                                )
+                                .background(Color(0xFFE2504A), CircleShape)
+                        )
+                    } else {
+                        // Gradient ring with a dark gap, echoing the app icon.
+                        Box(
+                            modifier = Modifier
+                                .size(captureSize)
+                                .alpha(captureButtonAlpha)
+                                .shadow(6.dp, CircleShape)
+                                .background(fingerprintRingBrush, CircleShape)
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(ringGapSize)
+                                .alpha(captureButtonAlpha)
+                                .background(Color(0xFF2C2D33), CircleShape)
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(discSize)
+                            .graphicsLayer(scaleX = capturePressScale, scaleY = capturePressScale)
+                            .alpha(captureButtonAlpha)
+                            .background(if (isRecordingPulse) Color(0xFFE2504A) else Color.White, CircleShape)
+                            .clickable(
+                                enabled = !isCapturing,
+                                interactionSource = captureInteractionSource,
+                                indication = null
+                            ) {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onCaptureClicked()
+                            }
+                    )
+                }
+            }
             }
         }
 
@@ -707,7 +836,12 @@ fun DemoScreen() {
                             showRgbControls = false
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4A4A4A))
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF5E5D62), contentColor = Color.White),
+                        elevation = ButtonDefaults.buttonElevation(
+                            defaultElevation = 6.dp,
+                            pressedElevation = 1.dp,
+                            hoveredElevation = 8.dp
+                        )
                     ) { Text("Apply") }
                 }
             }
@@ -760,7 +894,12 @@ fun DemoScreen() {
                             showFpsControls = false
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4A4A4A))
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF5E5D62), contentColor = Color.White),
+                        elevation = ButtonDefaults.buttonElevation(
+                            defaultElevation = 6.dp,
+                            pressedElevation = 1.dp,
+                            hoveredElevation = 8.dp
+                        )
                     ) { Text("Apply") }
                 }
             }
