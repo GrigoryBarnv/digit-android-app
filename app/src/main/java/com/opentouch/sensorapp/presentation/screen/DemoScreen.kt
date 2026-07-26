@@ -86,6 +86,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -115,6 +116,12 @@ private fun CircularNavButton(
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    // Sized relative to the available width by the caller (see the
+    // BoxWithConstraints wrapping the bottom bar) so the buttons scale up on
+    // wider screens (tablets) instead of staying a fixed phone-tuned size.
+    restSize: Dp = 48.dp,
+    selectedSize: Dp = 52.dp,
+    iconSize: Dp = 19.dp,
 ) {
     val lilac = Color(0xFF594BA0)
     val interactionSource = remember { MutableInteractionSource() }
@@ -128,7 +135,7 @@ private fun CircularNavButton(
         label = "navPressScale"
     )
     val size by androidx.compose.animation.core.animateDpAsState(
-        targetValue = if (selected) 52.dp else 48.dp,
+        targetValue = if (selected) selectedSize else restSize,
         animationSpec = tween(280),
         label = "navSize"
     )
@@ -162,7 +169,7 @@ private fun CircularNavButton(
                 ),
             contentAlignment = Alignment.Center
         ) {
-            Icon(icon, contentDescription = label, tint = iconColor, modifier = Modifier.size(19.dp))
+            Icon(icon, contentDescription = label, tint = iconColor, modifier = Modifier.size(iconSize))
         }
         Spacer(modifier = Modifier.height(6.dp))
         Text(label, fontSize = 11.sp, color = Color(0xFFC9C9CC), maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -456,6 +463,23 @@ fun DemoScreen() {
 
             Spacer(modifier = Modifier.height(8.dp))
 
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            // Sized off the card's own width so the nav buttons and popup
+            // offsets scale up on wider screens (tablets) instead of staying
+            // fixed at phone-tuned dp values, which looked tiny/misaligned
+            // on a tablet.
+            val navRestSize = (maxWidth * 0.09f).coerceIn(48.dp, 72.dp)
+            val navSelectedSize = navRestSize + 4.dp
+            val navIconSize = navRestSize * 0.4f
+            val settingsMenuOffsetX = (maxWidth * 0.09f).coerceIn(16.dp, 100.dp)
+            // Unlike the size/Settings-offset values above, this correction is
+            // NOT proportional to screen width - it exists because the AI
+            // popup's fixed-width content (None/Model 1/Model 2) doesn't fit
+            // past the anchor on a narrow phone, forcing Compose to clamp it
+            // left. A tablet has plenty of room there already, so this stays
+            // capped close to the phone-tuned value instead of scaling up.
+            val aiMenuOffsetX = -(maxWidth * 0.074f).coerceIn(8.dp, 28.dp)
+
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -472,6 +496,9 @@ fun DemoScreen() {
                     icon = Icons.Filled.PhotoLibrary,
                     label = "Gallery",
                     selected = false,
+                    restSize = navRestSize,
+                    selectedSize = navSelectedSize,
+                    iconSize = navIconSize,
                     onClick = {
                         val pm = context.packageManager
                         val seen = mutableSetOf<String>()
@@ -533,6 +560,9 @@ fun DemoScreen() {
                     icon = if (isVideoMode) Icons.Filled.Videocam else Icons.Filled.PhotoCamera,
                     label = if (isVideoMode) "Video" else "Photo",
                     selected = isVideoMode,
+                    restSize = navRestSize,
+                    selectedSize = navSelectedSize,
+                    iconSize = navIconSize,
                     onClick = { if (!isRecording) isVideoMode = !isVideoMode }
                 )
 
@@ -542,13 +572,16 @@ fun DemoScreen() {
                         icon = Icons.Filled.AutoAwesome,
                         label = if (selectedModel == "None") "AI" else selectedModel,
                         selected = selectedModel != "None",
+                        restSize = navRestSize,
+                        selectedSize = navSelectedSize,
+                        iconSize = navIconSize,
                         onClick = { showModelMenu = true }
                     )
                     DropdownMenu(
                         expanded = showModelMenu,
                         onDismissRequest = { showModelMenu = false },
                         containerColor = Color(0xFF2D2D2D),
-                        offset = DpOffset(x = -25.dp, y = -5.dp)
+                        offset = DpOffset(x = aiMenuOffsetX, y = (-5).dp)
                     ) {
                         DropdownMenuItem(
                             text = { Text("None", color = Color.White) },
@@ -572,6 +605,9 @@ fun DemoScreen() {
                         icon = Icons.Filled.Settings,
                         label = "Settings",
                         selected = false,
+                        restSize = navRestSize,
+                        selectedSize = navSelectedSize,
+                        iconSize = navIconSize,
                         onClick = { showSettingsMenu = true }
                     )
 
@@ -579,7 +615,7 @@ fun DemoScreen() {
                         expanded = showSettingsMenu,
                         onDismissRequest = { showSettingsMenu = false },
                         containerColor = Color(0xFF2D2D2D),
-                        offset = DpOffset(x = 31.dp, y = -5.dp)
+                        offset = DpOffset(x = settingsMenuOffsetX, y = (-5).dp)
                     ) {
                         // ── FPS — live measured vs rated spec. Tapping opens the
                         // FPS controls panel (same pattern as RGB controls below),
@@ -849,6 +885,7 @@ fun DemoScreen() {
                             }
                     )
                 }
+            }
             }
             }
         }
