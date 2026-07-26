@@ -318,11 +318,17 @@ class CameraPreviewFragment : CameraFragment() {
                     // connected. detectionSequence only increments in the
                     // branch above, so the "is this sensor supported?" popup
                     // still fires only once per physical connection.
+                    val serial = try {
+                        device.serialNumber
+                    } catch (e: SecurityException) {
+                        null
+                    }
                     _detectedDevice.value = DetectedDevice(
                         name = device.productName?.takeIf { it.isNotBlank() }
                             ?: "Unknown USB device",
                         vendorId = device.vendorId,
                         productId = device.productId,
+                        serialNumber = serial,
                         sequence = detectionSequence
                     )
                 }
@@ -1000,14 +1006,23 @@ class CameraPreviewFragment : CameraFragment() {
     enum class ConnectDecision { NONE, CONNECT, CANCEL }
 
     /** A USB device that was just detected, for the "is this sensor supported?" popup. */
+    /**
+     * A USB device that was just detected. Sensors connect automatically now —
+     * this is read by the Settings menu to show identity info (and offer a
+     * manual disconnect) rather than by an interrupting connect/cancel popup.
+     */
     data class DetectedDevice(
         val name: String,
         val vendorId: Int,
         val productId: Int,
+        // Null if the device's USB descriptor doesn't report one, or if
+        // reading it throws (some devices/API levels refuse this even with
+        // permission already granted).
+        val serialNumber: String?,
         // Increments each time a device is (re)detected. Without this, plugging
         // the same sensor back in would produce an identical DetectedDevice
         // (data classes compare by value), so Compose state wouldn't register
-        // a change and the popup wouldn't reappear.
+        // a change.
         val sequence: Int
     )
 

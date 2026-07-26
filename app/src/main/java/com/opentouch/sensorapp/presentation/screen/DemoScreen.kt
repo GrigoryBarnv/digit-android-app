@@ -42,13 +42,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Videocam
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -60,7 +61,6 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -93,7 +93,6 @@ import androidx.fragment.app.FragmentActivity
 import androidx.fragment.app.FragmentContainerView
 import androidx.fragment.app.commit
 import com.opentouch.sensorapp.data.SupportedSensors
-import com.opentouch.sensorapp.data.SensorMatchType
 import com.opentouch.sensorapp.presentation.component.RgbControls
 import com.opentouch.sensorapp.presentation.component.SensorPreviewShape
 import com.opentouch.sensorapp.presentation.fragment.CameraPreviewFragment
@@ -256,7 +255,6 @@ fun DemoScreen() {
 
     // ── USB sensor connection popup ────────────────────────────────────────────
     val detectedDevice = CameraPreviewFragment.detectedDevice.value
-    var dismissedSequence by remember { mutableIntStateOf(0) }
 
     // Which supported sensor (if any) is currently connected. Hoisted to the
     // top of the function so both the main layout (preview shape) and the
@@ -686,6 +684,74 @@ fun DemoScreen() {
                                 )
                             }
                         }
+
+                        HorizontalDivider()
+
+                        // ── Connected sensor — read-only identity info, plus a
+                        // manual way to disconnect. Sensors now connect
+                        // automatically with no interrupting "Connect to X?"
+                        // popup; this replaces that popup's info (name, IDs,
+                        // now also serial) and its only real function — the
+                        // ability to reject/disconnect an unrecognized sensor
+                        // — as a menu item instead of a blocking dialog.
+                        if (detectedDevice != null) {
+                            DropdownMenuItem(
+                                text = { Text(matchedSensor?.displayName ?: detectedDevice.name, color = Color.White) },
+                                leadingIcon = { Icon(Icons.Filled.Info, contentDescription = null, tint = Color.White) },
+                                enabled = false,
+                                onClick = { }
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "   Vendor ID: 0x%04X (%d)".format(detectedDevice.vendorId, detectedDevice.vendorId),
+                                        fontSize = 12.sp,
+                                        color = Color(0xFF9A9A9A),
+                                    )
+                                },
+                                enabled = false,
+                                onClick = { }
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "   Product ID: 0x%04X (%d)".format(detectedDevice.productId, detectedDevice.productId),
+                                        fontSize = 12.sp,
+                                        color = Color(0xFF9A9A9A),
+                                    )
+                                },
+                                enabled = false,
+                                onClick = { }
+                            )
+                            if (!detectedDevice.serialNumber.isNullOrBlank()) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            "   Serial: ${detectedDevice.serialNumber}",
+                                            fontSize = 12.sp,
+                                            color = Color(0xFF9A9A9A),
+                                        )
+                                    },
+                                    enabled = false,
+                                    onClick = { }
+                                )
+                            }
+                            DropdownMenuItem(
+                                text = { Text("Disconnect sensor", color = Color(0xFFE2504A)) },
+                                leadingIcon = { Icon(Icons.Filled.LinkOff, contentDescription = null, tint = Color(0xFFE2504A)) },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    CameraPreviewFragment.declineConnect()
+                                }
+                            )
+                        } else {
+                            DropdownMenuItem(
+                                text = { Text("No sensor connected", color = Color(0xFF9A9A9A)) },
+                                leadingIcon = { Icon(Icons.Filled.Info, contentDescription = null, tint = Color(0xFF9A9A9A)) },
+                                enabled = false,
+                                onClick = { }
+                            )
+                        }
                     }
                 }
             }
@@ -949,67 +1015,5 @@ fun DemoScreen() {
             }
         }
 
-        // ── Sensor detection popup ──────────────────────────────────────────
-        if (detectedDevice != null && detectedDevice.sequence != dismissedSequence) {
-            val match = SupportedSensors.classify(
-                detectedDevice.vendorId,
-                detectedDevice.productId,
-                detectedDevice.name,
-            )
-            val titleText = when (match.type) {
-                SensorMatchType.KNOWN    -> "Sensor supported"
-                SensorMatchType.PROBABLE -> "Sensor recognized"
-                SensorMatchType.UNKNOWN  -> "Unrecognized sensor"
-            }
-            AlertDialog(
-                onDismissRequest = {
-                    dismissedSequence = detectedDevice.sequence
-                    CameraPreviewFragment.declineConnect()
-                },
-                title = { Text(titleText) },
-                text = {
-                    Column {
-                        Text("Supported sensors:")
-                        SupportedSensors.list.forEach { sensor ->
-                            Text("• ${sensor.displayName}")
-                        }
-                        if (SupportedSensors.list.isEmpty()) {
-                            Text("• (none added yet)")
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("Detected sensor: ${detectedDevice.name}")
-                        Text("Vendor ID: 0x%04X (%d)".format(detectedDevice.vendorId, detectedDevice.vendorId))
-                        Text("Product ID: 0x%04X (%d)".format(detectedDevice.productId, detectedDevice.productId))
-                        Spacer(modifier = Modifier.height(8.dp))
-                        when (match.type) {
-                            SensorMatchType.KNOWN ->
-                                Text("✓ This sensor (${match.sensor?.displayName}) is supported.")
-                            SensorMatchType.PROBABLE ->
-                                Text("≈ This looks like a ${match.sensor?.displayName} " +
-                                        "(new hardware revision). It should work — tap Connect.")
-                            SensorMatchType.UNKNOWN ->
-                                Text("This sensor isn't in the recognized list, but it may " +
-                                        "still work. Tap Connect to try it.")
-                        }
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        dismissedSequence = detectedDevice.sequence
-                        CameraPreviewFragment.confirmConnect()
-                    }) {
-                        Text("Connect")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = {
-                        dismissedSequence = detectedDevice.sequence
-                        CameraPreviewFragment.declineConnect()
-                    }) {
-                        Text("Cancel")
-                    }
-                }
-            )
-        }
     }
 }
