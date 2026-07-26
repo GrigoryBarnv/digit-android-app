@@ -86,6 +86,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -546,7 +547,8 @@ fun DemoScreen() {
                     DropdownMenu(
                         expanded = showModelMenu,
                         onDismissRequest = { showModelMenu = false },
-                        containerColor = Color(0xFF2D2D2D)
+                        containerColor = Color(0xFF2D2D2D),
+                        offset = DpOffset(x = -25.dp, y = -5.dp)
                     ) {
                         DropdownMenuItem(
                             text = { Text("None", color = Color.White) },
@@ -576,7 +578,8 @@ fun DemoScreen() {
                     DropdownMenu(
                         expanded = showSettingsMenu,
                         onDismissRequest = { showSettingsMenu = false },
-                        containerColor = Color(0xFF2D2D2D)
+                        containerColor = Color(0xFF2D2D2D),
+                        offset = DpOffset(x = 31.dp, y = -5.dp)
                     ) {
                         // ── FPS — live measured vs rated spec. Tapping opens the
                         // FPS controls panel (same pattern as RGB controls below),
@@ -696,44 +699,29 @@ fun DemoScreen() {
                         // — as a menu item instead of a blocking dialog.
                         if (detectedDevice != null) {
                             DropdownMenuItem(
-                                text = { Text(matchedSensor?.displayName ?: detectedDevice.name, color = Color.White) },
+                                text = { Text("Device: ${matchedSensor?.shortName ?: detectedDevice.name}", color = Color.White) },
                                 leadingIcon = { Icon(Icons.Filled.Info, contentDescription = null, tint = Color.White) },
                                 enabled = false,
                                 onClick = { }
                             )
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        "   Vendor ID: 0x%04X (%d)".format(detectedDevice.vendorId, detectedDevice.vendorId),
-                                        fontSize = 12.sp,
-                                        color = Color(0xFF9A9A9A),
-                                    )
-                                },
-                                enabled = false,
-                                onClick = { }
+                            Text(
+                                "Vendor ID: 0x%04X (%d)".format(detectedDevice.vendorId, detectedDevice.vendorId),
+                                fontSize = 12.sp,
+                                color = Color(0xFF9A9A9A),
+                                modifier = Modifier.padding(start = 48.dp, end = 12.dp, top = 4.dp, bottom = 4.dp)
                             )
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        "   Product ID: 0x%04X (%d)".format(detectedDevice.productId, detectedDevice.productId),
-                                        fontSize = 12.sp,
-                                        color = Color(0xFF9A9A9A),
-                                    )
-                                },
-                                enabled = false,
-                                onClick = { }
+                            Text(
+                                "Product ID: 0x%04X (%d)".format(detectedDevice.productId, detectedDevice.productId),
+                                fontSize = 12.sp,
+                                color = Color(0xFF9A9A9A),
+                                modifier = Modifier.padding(start = 48.dp, end = 12.dp, top = 4.dp, bottom = 4.dp)
                             )
                             if (!detectedDevice.serialNumber.isNullOrBlank()) {
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            "   Serial: ${detectedDevice.serialNumber}",
-                                            fontSize = 12.sp,
-                                            color = Color(0xFF9A9A9A),
-                                        )
-                                    },
-                                    enabled = false,
-                                    onClick = { }
+                                Text(
+                                    "Serial: ${detectedDevice.serialNumber}",
+                                    fontSize = 12.sp,
+                                    color = Color(0xFF9A9A9A),
+                                    modifier = Modifier.padding(start = 48.dp, end = 12.dp, top = 4.dp, bottom = 4.dp)
                                 )
                             }
                             DropdownMenuItem(
