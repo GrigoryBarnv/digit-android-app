@@ -1,5 +1,7 @@
 package com.opentouch.sensorapp.presentation.fragment
 
+import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
 import android.Manifest
 import android.content.ContentValues
 import android.content.pm.PackageManager
@@ -134,9 +136,38 @@ class CameraPreviewFragment : CameraFragment() {
         _currentFps.value = 0
     }
 
+    /**
+     * Shows the "Waiting for Touch Sensor" status text along with a list of
+     * the sensor models this app recognizes (per Roberto's feedback), so
+     * someone with an unsupported/unrecognized device knows what's expected
+     * before they even plug one in.
+     */
+    private fun showWaitingForSensor() {
+        _binding?.statusText?.text = getString(R.string.camera_waiting_for_device)
+        _binding?.supportedModelsText?.apply {
+            text = "Supported: " + SupportedSensors.list.joinToString(", ") { it.displayName }
+            visibility = View.VISIBLE
+        }
+    }
+
+    /** Hides the supported-models list for any status other than "waiting". */
+    private fun hideSupportedModelsList() {
+        _binding?.supportedModelsText?.visibility = View.GONE
+    }
+
     override fun getRootView(inflater: LayoutInflater, container: ViewGroup?): View {
         _binding = FragmentCameraPreviewBinding.inflate(inflater, container, false)
         binding.reconnectButton.setOnClickListener { onReconnectClicked() }
+
+        // Soft pulsing dot next to the status pill (waiting/disconnected/error
+        // messages) - runs continuously; only visible while the pill itself is.
+        ObjectAnimator.ofFloat(binding.statusDot, "alpha", 1f, 0.25f).apply {
+            duration = 700
+            repeatMode = ValueAnimator.REVERSE
+            repeatCount = ValueAnimator.INFINITE
+            start()
+        }
+
         return binding.root
     }
 
@@ -194,7 +225,7 @@ class CameraPreviewFragment : CameraFragment() {
 
     override fun initData() {
         super.initData()
-        _binding?.statusText?.text = getString(R.string.camera_waiting_for_device)
+        showWaitingForSensor()
         startPermissionOpenRetry(initialDelayMs = 600)
     }
 
@@ -239,9 +270,19 @@ class CameraPreviewFragment : CameraFragment() {
         msg: String?
     ) {
         val statusView = view?.findViewById<TextView>(R.id.statusText) ?: return
+        val statusPillView = view?.findViewById<View>(R.id.statusPill)
+        // Covers the stale last-rendered frame with black whenever the sensor
+        // isn't actively streaming, so a disconnect doesn't leave a frozen
+        // frame showing behind the status message.
+        val disconnectedOverlay = view?.findViewById<View>(R.id.disconnectedOverlay)
+        // The supported-models list only belongs next to the "waiting for
+        // sensor" message (shown via showWaitingForSensor()) - hide it by
+        // default for every other status, below.
+        hideSupportedModelsList()
         when (code) {
             ICameraStateCallBack.State.OPENED -> {
-                statusView.visibility = View.GONE
+                statusPillView?.visibility = View.GONE
+                disconnectedOverlay?.visibility = View.GONE
                 _binding?.reconnectButton?.visibility = View.GONE
                 applyRgb(pendingRed, pendingGreen, pendingBlue)
                 permissionRetryJob?.cancel()
@@ -287,7 +328,8 @@ class CameraPreviewFragment : CameraFragment() {
                 }
             }
             ICameraStateCallBack.State.CLOSED -> {
-                statusView.visibility = View.VISIBLE
+                statusPillView?.visibility = View.VISIBLE
+                disconnectedOverlay?.visibility = View.VISIBLE
                 stopFpsMeasurement()
                 // Dismiss any visible popup, but DO NOT clear
                 // lastDetectedDeviceKey here — otherwise an app-resume reopen
@@ -325,7 +367,8 @@ class CameraPreviewFragment : CameraFragment() {
                 }
             }
             ICameraStateCallBack.State.ERROR -> {
-                statusView.visibility = View.VISIBLE
+                statusPillView?.visibility = View.VISIBLE
+                disconnectedOverlay?.visibility = View.VISIBLE
                 stopFpsMeasurement()
                 statusView.text = getString(R.string.camera_error, msg ?: "unknown")
             }
@@ -377,10 +420,11 @@ class CameraPreviewFragment : CameraFragment() {
             // Explicit Reconnect tap — allow the popup to show again for this
             // device by forgetting the previously-shown key.
             lastDetectedDeviceKey = null
+            hideSupportedModelsList()
             _binding?.statusText?.text = getString(R.string.camera_detected_requesting_permission)
             requestPermission(device)
         } else {
-            _binding?.statusText?.text = getString(R.string.camera_waiting_for_device)
+            showWaitingForSensor()
             startPermissionOpenRetry(initialDelayMs = 500)
         }
     }
@@ -453,8 +497,8 @@ class CameraPreviewFragment : CameraFragment() {
 
     /**
      * Identifies which supported sensor is currently connected, so captures can
-     * be routed into a matching folder (Pictures/Open_Touch_Digit,
-     * Pictures/Open_Touch_GelSightMini, ...). Falls back to "Other" if the
+     * be routed into a matching folder (Pictures/OpenTouch_Digit,
+     * Pictures/OpenTouch_GelSightMini, ...). Falls back to "Other" if the
      * connected device doesn't match a known sensor.
      */
     private fun currentSensorFolderName(): String {
@@ -465,7 +509,7 @@ class CameraPreviewFragment : CameraFragment() {
 
     /**
      * Generates the photo filename in the format:
-     * Open_Touch_Digit_001_2026-05-29_18-30-45.jpg
+     * OpenTouch_Digit_001_2026-05-29_18-30-45.jpg
      * The number is based on how many photos already exist in this sensor's
      * folder, so numbering is independent per sensor and always correct even
      * after the app restarts. The sensor name is baked into both the folder
@@ -478,7 +522,7 @@ class CameraPreviewFragment : CameraFragment() {
             val projection = arrayOf(MediaStore.Images.Media._ID)
             val selection =
                 "${MediaStore.Images.Media.RELATIVE_PATH} = ? AND ${MediaStore.Images.Media.DISPLAY_NAME} LIKE ?"
-            val selectionArgs = arrayOf("Pictures/Open_Touch_$sensorFolder/", "Open_Touch_${sensorFolder}_%.jpg")
+            val selectionArgs = arrayOf("Pictures/OpenTouch_$sensorFolder/", "OpenTouch_${sensorFolder}_%.jpg")
             requireContext().contentResolver.query(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                 projection, selection, selectionArgs, null
@@ -488,14 +532,14 @@ class CameraPreviewFragment : CameraFragment() {
         val nextNumber = String.format("%03d", existingCount + 1)
         val datePart = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
         val timePart = SimpleDateFormat("HH-mm-ss", Locale.US).format(Date())
-        return "Open_Touch_${sensorFolder}_${nextNumber}_${datePart}_${timePart}.jpg"
+        return "OpenTouch_${sensorFolder}_${nextNumber}_${datePart}_${timePart}.jpg"
     }
 
     /**
      * Returns a temporary path inside the app's private folder.
      * This works on ALL Android versions with no permissions needed.
-     * We save here first, then move to the public Pictures/Open_Touch_<sensor>/
-     * or Movies/Open_Touch_<sensor>/ folder.
+     * We save here first, then move to the public Pictures/OpenTouch_<sensor>/
+     * or Movies/OpenTouch_<sensor>/ folder.
      */
     private fun getTempPath(extension: String = "jpg"): String? {
         return try {
@@ -531,7 +575,7 @@ class CameraPreviewFragment : CameraFragment() {
 
     /**
      * Moves the photo from the temp private folder to the public
-     * Pictures/Open_Touch_<sensor>/ folder.
+     * Pictures/OpenTouch_<sensor>/ folder.
      * Works on ALL Android versions:
      *   - Android 10+ (API 29+): uses MediaStore API — no extra permission needed.
      *   - Android 9 and below: uses direct file copy — needs WRITE_EXTERNAL_STORAGE permission.
@@ -546,7 +590,7 @@ class CameraPreviewFragment : CameraFragment() {
                 val contentValues = ContentValues().apply {
                     put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
                     put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-                    put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Open_Touch_$sensorFolder")
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/OpenTouch_$sensorFolder")
                     // IS_PENDING = 1 means "I'm still writing this file, don't show it yet."
                     // We set it to 0 after the copy is done so the gallery shows it properly.
                     put(MediaStore.Images.Media.IS_PENDING, 1)
@@ -591,10 +635,10 @@ class CameraPreviewFragment : CameraFragment() {
                 // WRITE_EXTERNAL_STORAGE permission is declared in the manifest for these versions.
                 val destDir = File(
                     Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
-                    "Open_Touch_$sensorFolder"
+                    "OpenTouch_$sensorFolder"
                 )
                 if (!destDir.exists() && !destDir.mkdirs()) {
-                    Logger.e("CameraPreviewFragment", "moveToPublicStorage: could not create Open_Touch dir")
+                    Logger.e("CameraPreviewFragment", "moveToPublicStorage: could not create OpenTouch dir")
                     return null
                 }
                 val destFile = File(destDir, fileName)
@@ -613,13 +657,13 @@ class CameraPreviewFragment : CameraFragment() {
 
     /**
      * Takes a single photo from the USB camera and saves it to
-     * Pictures/Open_Touch_<sensor>/. Works on all Android versions (7 through 14+).
+     * Pictures/OpenTouch_<sensor>/. Works on all Android versions (7 through 14+).
      *
      * Flow:
      *  1. Check storage permission on Android 9 and below
      *  2. Save to a temp private file (always accessible, no permission needed)
      *  3. Write EXIF metadata to the temp file
-     *  4. Move temp file to Pictures/Open_Touch_<sensor>/ using the correct method for the Android version
+     *  4. Move temp file to Pictures/OpenTouch_<sensor>/ using the correct method for the Android version
      *  5. Delete the temp file
      *
      * [onDone] is called on the main thread with:
@@ -704,7 +748,7 @@ class CameraPreviewFragment : CameraFragment() {
                     }
                     // Step 2: write metadata into the temp file
                     writeMetadata(path)
-                    // Step 2: move to public Pictures/Open_Touch_<sensor>/ folder
+                    // Step 2: move to public Pictures/OpenTouch_<sensor>/ folder
                     val sensorFolder = currentSensorFolderName()
                     val fileName = generateFileName(sensorFolder)
                     val finalPath = moveToPublicStorage(path, fileName, sensorFolder)
@@ -716,7 +760,7 @@ class CameraPreviewFragment : CameraFragment() {
                     } else {
                         // moveToPublicStorage failed — photo was saved in temp but we couldn't move it.
                         // Still report success since the image data exists.
-                        Logger.e("CameraPreviewFragment", "Could not move photo to Pictures/Open_Touch_")
+                        Logger.e("CameraPreviewFragment", "Could not move photo to Pictures/OpenTouch_")
                         onDone(true, path)
                     }
                 }
@@ -728,7 +772,7 @@ class CameraPreviewFragment : CameraFragment() {
 
     /**
      * Generates a video filename:
-     * Open_Touch_Digit_VID_001_2026-05-29_18-30-45.mp4
+     * OpenTouch_Digit_VID_001_2026-05-29_18-30-45.mp4
      * Counter is based on existing videos in this sensor's Movies folder, so
      * numbering is independent per sensor. The sensor name is baked into both
      * the folder AND the filename, since folder structure is lost if a video
@@ -739,7 +783,7 @@ class CameraPreviewFragment : CameraFragment() {
             val projection = arrayOf(MediaStore.Video.Media._ID)
             val selection =
                 "${MediaStore.Video.Media.RELATIVE_PATH} = ? AND ${MediaStore.Video.Media.DISPLAY_NAME} LIKE ?"
-            val selectionArgs = arrayOf("Movies/Open_Touch_$sensorFolder/", "Open_Touch_${sensorFolder}_VID_%.mp4")
+            val selectionArgs = arrayOf("Movies/OpenTouch_$sensorFolder/", "OpenTouch_${sensorFolder}_VID_%.mp4")
             requireContext().contentResolver.query(
                 MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
                 projection, selection, selectionArgs, null
@@ -749,12 +793,12 @@ class CameraPreviewFragment : CameraFragment() {
         val nextNumber = String.format("%03d", existingCount + 1)
         val datePart = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
         val timePart = SimpleDateFormat("HH-mm-ss", Locale.US).format(Date())
-        return "Open_Touch_${sensorFolder}_VID_${nextNumber}_${datePart}_${timePart}.mp4"
+        return "OpenTouch_${sensorFolder}_VID_${nextNumber}_${datePart}_${timePart}.mp4"
     }
 
     /**
      * Moves a finished video from the temp private folder to
-     * Movies/Open_Touch_<sensor>/. "Movies" is Android's fixed system directory
+     * Movies/OpenTouch_<sensor>/. "Movies" is Android's fixed system directory
      * name for video content (like "Pictures" is for photos) - it can't be
      * renamed, but the folder name underneath it is fully our own.
      * Android 10+: MediaStore API (no permission needed).
@@ -767,7 +811,7 @@ class CameraPreviewFragment : CameraFragment() {
                 val contentValues = ContentValues().apply {
                     put(MediaStore.Video.Media.DISPLAY_NAME, fileName)
                     put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-                    put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/Open_Touch_$sensorFolder")
+                    put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/OpenTouch_$sensorFolder")
                     put(MediaStore.Video.Media.IS_PENDING, 1)
                 }
                 val uri = context.contentResolver.insert(
@@ -801,10 +845,10 @@ class CameraPreviewFragment : CameraFragment() {
             } else {
                 val destDir = File(
                     Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
-                    "Open_Touch_$sensorFolder"
+                    "OpenTouch_$sensorFolder"
                 )
                 if (!destDir.exists() && !destDir.mkdirs()) {
-                    Logger.e("CameraPreviewFragment", "moveVideoToPublicStorage: could not create Open_Touch dir")
+                    Logger.e("CameraPreviewFragment", "moveVideoToPublicStorage: could not create OpenTouch dir")
                     return null
                 }
                 val destFile = File(destDir, fileName)
@@ -877,7 +921,7 @@ class CameraPreviewFragment : CameraFragment() {
                     if (finalPath != null) {
                         onDone(true, finalPath)
                     } else {
-                        Logger.e("CameraPreviewFragment", "Could not move video to Movies/Open_Touch_")
+                        Logger.e("CameraPreviewFragment", "Could not move video to Movies/OpenTouch_")
                         onDone(true, path) // temp path — video still exists
                     }
                 }
@@ -887,7 +931,7 @@ class CameraPreviewFragment : CameraFragment() {
 
     /**
      * Stops an in-progress recording. onDone from [startVideoRecording] will be called
-     * once the file is finalised and moved to Movies/Open_Touch_<sensor>/.
+     * once the file is finalised and moved to Movies/OpenTouch_<sensor>/.
      */
     fun stopVideoRecording() {
         captureVideoStop()
@@ -916,7 +960,7 @@ class CameraPreviewFragment : CameraFragment() {
                             firstDevice.productId == FT900_DFU_PRODUCT_ID
                     if (isTransientBootloader && ftdiBootloaderPollCount < 12) {
                         ftdiBootloaderPollCount++
-                        _binding?.statusText?.text = getString(R.string.camera_waiting_for_device)
+                        showWaitingForSensor()
                         lastDetectedDeviceKey = null
                         delay(500)
                         return@repeat
@@ -925,7 +969,8 @@ class CameraPreviewFragment : CameraFragment() {
 
                     if (!permissionRequested) {
                         // First time we see the device — request permission,
-                        // which shows the "Allow Open Touch to access …?" dialog.
+                        // which shows the "Allow OpenTouch to access …?" dialog.
+                        hideSupportedModelsList()
                         _binding?.statusText?.text = getString(R.string.camera_detected_requesting_permission)
                         requestPermission(firstDevice)
                         permissionRequested = true
@@ -934,6 +979,7 @@ class CameraPreviewFragment : CameraFragment() {
                         // and the camera is still opening, or tapped Cancel and
                         // we're re-requesting on the next poll). Show a message
                         // that reflects the actual state — not "requesting" again.
+                        hideSupportedModelsList()
                         _binding?.statusText?.text = getString(R.string.camera_detected_requesting_permission)
                         requestPermission(firstDevice)
                     }

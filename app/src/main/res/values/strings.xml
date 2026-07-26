@@ -1,6 +1,6 @@
 ﻿<resources>
-    <string name="app_name">Open Touch</string>
-    <string name="camera_waiting_for_device">Waiting for USB camera...</string>
+    <string name="app_name">OpenTouch</string>
+    <string name="camera_waiting_for_device">Waiting for Touch Sensor</string>
     <string name="camera_detected_requesting_permission">USB device detected. Requesting permission...</string>
     <string name="camera_opened">Camera opened</string>
     <string name="camera_closed">Camera closed</string>
