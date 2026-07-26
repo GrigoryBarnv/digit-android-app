@@ -21,6 +21,8 @@ package com.opentouch.sensorapp.data
  */
 data class SupportedSensor(
     val displayName: String,
+    /** Short device name for compact UI (e.g. the Settings sensor-info row). */
+    val shortName: String,
     val vendorId: Int,
     val productIds: Set<Int>,
     val nameFragment: String,
@@ -44,7 +46,8 @@ data class SensorMatch(
 object SupportedSensors {
     val list: List<SupportedSensor> = listOf(
         SupportedSensor(
-            displayName = "Open Touch Sensor (DIGIT)",
+            displayName = "OpenTouch Sensor (DIGIT)",
+            shortName = "DIGIT",
             vendorId = 0x2833,
             productIds = setOf(0x0209),
             nameFragment = "digit",
@@ -55,6 +58,7 @@ object SupportedSensors {
         ),
         SupportedSensor(
             displayName = "GelSight Mini",
+            shortName = "GelSight Mini",
             vendorId = 0x0C45,
             productIds = setOf(0x636D),   // R0B (28BJ-5HLX). Add future revision PIDs here.
             nameFragment = "gelsight",

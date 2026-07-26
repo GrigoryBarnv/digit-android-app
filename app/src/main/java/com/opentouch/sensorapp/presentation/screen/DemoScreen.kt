@@ -42,13 +42,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Videocam
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -60,7 +61,6 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -86,6 +86,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -93,7 +95,6 @@ import androidx.fragment.app.FragmentActivity
 import androidx.fragment.app.FragmentContainerView
 import androidx.fragment.app.commit
 import com.opentouch.sensorapp.data.SupportedSensors
-import com.opentouch.sensorapp.data.SensorMatchType
 import com.opentouch.sensorapp.presentation.component.RgbControls
 import com.opentouch.sensorapp.presentation.component.SensorPreviewShape
 import com.opentouch.sensorapp.presentation.fragment.CameraPreviewFragment
@@ -115,6 +116,12 @@ private fun CircularNavButton(
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    // Sized relative to the available width by the caller (see the
+    // BoxWithConstraints wrapping the bottom bar) so the buttons scale up on
+    // wider screens (tablets) instead of staying a fixed phone-tuned size.
+    restSize: Dp = 48.dp,
+    selectedSize: Dp = 52.dp,
+    iconSize: Dp = 19.dp,
 ) {
     val lilac = Color(0xFF594BA0)
     val interactionSource = remember { MutableInteractionSource() }
@@ -128,7 +135,7 @@ private fun CircularNavButton(
         label = "navPressScale"
     )
     val size by androidx.compose.animation.core.animateDpAsState(
-        targetValue = if (selected) 52.dp else 48.dp,
+        targetValue = if (selected) selectedSize else restSize,
         animationSpec = tween(280),
         label = "navSize"
     )
@@ -162,7 +169,7 @@ private fun CircularNavButton(
                 ),
             contentAlignment = Alignment.Center
         ) {
-            Icon(icon, contentDescription = label, tint = iconColor, modifier = Modifier.size(19.dp))
+            Icon(icon, contentDescription = label, tint = iconColor, modifier = Modifier.size(iconSize))
         }
         Spacer(modifier = Modifier.height(6.dp))
         Text(label, fontSize = 11.sp, color = Color(0xFFC9C9CC), maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -256,7 +263,6 @@ fun DemoScreen() {
 
     // ── USB sensor connection popup ────────────────────────────────────────────
     val detectedDevice = CameraPreviewFragment.detectedDevice.value
-    var dismissedSequence by remember { mutableIntStateOf(0) }
 
     // Which supported sensor (if any) is currently connected. Hoisted to the
     // top of the function so both the main layout (preview shape) and the
@@ -457,6 +463,23 @@ fun DemoScreen() {
 
             Spacer(modifier = Modifier.height(8.dp))
 
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            // Sized off the card's own width so the nav buttons and popup
+            // offsets scale up on wider screens (tablets) instead of staying
+            // fixed at phone-tuned dp values, which looked tiny/misaligned
+            // on a tablet.
+            val navRestSize = (maxWidth * 0.09f).coerceIn(48.dp, 72.dp)
+            val navSelectedSize = navRestSize + 4.dp
+            val navIconSize = navRestSize * 0.4f
+            val settingsMenuOffsetX = (maxWidth * 0.09f).coerceIn(16.dp, 100.dp)
+            // Unlike the size/Settings-offset values above, this correction is
+            // NOT proportional to screen width - it exists because the AI
+            // popup's fixed-width content (None/Model 1/Model 2) doesn't fit
+            // past the anchor on a narrow phone, forcing Compose to clamp it
+            // left. A tablet has plenty of room there already, so this stays
+            // capped close to the phone-tuned value instead of scaling up.
+            val aiMenuOffsetX = -(maxWidth * 0.074f).coerceIn(8.dp, 28.dp)
+
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -473,6 +496,9 @@ fun DemoScreen() {
                     icon = Icons.Filled.PhotoLibrary,
                     label = "Gallery",
                     selected = false,
+                    restSize = navRestSize,
+                    selectedSize = navSelectedSize,
+                    iconSize = navIconSize,
                     onClick = {
                         val pm = context.packageManager
                         val seen = mutableSetOf<String>()
@@ -534,6 +560,9 @@ fun DemoScreen() {
                     icon = if (isVideoMode) Icons.Filled.Videocam else Icons.Filled.PhotoCamera,
                     label = if (isVideoMode) "Video" else "Photo",
                     selected = isVideoMode,
+                    restSize = navRestSize,
+                    selectedSize = navSelectedSize,
+                    iconSize = navIconSize,
                     onClick = { if (!isRecording) isVideoMode = !isVideoMode }
                 )
 
@@ -543,12 +572,16 @@ fun DemoScreen() {
                         icon = Icons.Filled.AutoAwesome,
                         label = if (selectedModel == "None") "AI" else selectedModel,
                         selected = selectedModel != "None",
+                        restSize = navRestSize,
+                        selectedSize = navSelectedSize,
+                        iconSize = navIconSize,
                         onClick = { showModelMenu = true }
                     )
                     DropdownMenu(
                         expanded = showModelMenu,
                         onDismissRequest = { showModelMenu = false },
-                        containerColor = Color(0xFF2D2D2D)
+                        containerColor = Color(0xFF2D2D2D),
+                        offset = DpOffset(x = aiMenuOffsetX, y = (-5).dp)
                     ) {
                         DropdownMenuItem(
                             text = { Text("None", color = Color.White) },
@@ -572,13 +605,17 @@ fun DemoScreen() {
                         icon = Icons.Filled.Settings,
                         label = "Settings",
                         selected = false,
+                        restSize = navRestSize,
+                        selectedSize = navSelectedSize,
+                        iconSize = navIconSize,
                         onClick = { showSettingsMenu = true }
                     )
 
                     DropdownMenu(
                         expanded = showSettingsMenu,
                         onDismissRequest = { showSettingsMenu = false },
-                        containerColor = Color(0xFF2D2D2D)
+                        containerColor = Color(0xFF2D2D2D),
+                        offset = DpOffset(x = settingsMenuOffsetX, y = (-5).dp)
                     ) {
                         // ── FPS — live measured vs rated spec. Tapping opens the
                         // FPS controls panel (same pattern as RGB controls below),
@@ -685,6 +722,59 @@ fun DemoScreen() {
                                     onClick = { }
                                 )
                             }
+                        }
+
+                        HorizontalDivider()
+
+                        // ── Connected sensor — read-only identity info, plus a
+                        // manual way to disconnect. Sensors now connect
+                        // automatically with no interrupting "Connect to X?"
+                        // popup; this replaces that popup's info (name, IDs,
+                        // now also serial) and its only real function — the
+                        // ability to reject/disconnect an unrecognized sensor
+                        // — as a menu item instead of a blocking dialog.
+                        if (detectedDevice != null) {
+                            DropdownMenuItem(
+                                text = { Text("Device: ${matchedSensor?.shortName ?: detectedDevice.name}", color = Color.White) },
+                                leadingIcon = { Icon(Icons.Filled.Info, contentDescription = null, tint = Color.White) },
+                                enabled = false,
+                                onClick = { }
+                            )
+                            Text(
+                                "Vendor ID: 0x%04X (%d)".format(detectedDevice.vendorId, detectedDevice.vendorId),
+                                fontSize = 12.sp,
+                                color = Color(0xFF9A9A9A),
+                                modifier = Modifier.padding(start = 48.dp, end = 12.dp, top = 4.dp, bottom = 4.dp)
+                            )
+                            Text(
+                                "Product ID: 0x%04X (%d)".format(detectedDevice.productId, detectedDevice.productId),
+                                fontSize = 12.sp,
+                                color = Color(0xFF9A9A9A),
+                                modifier = Modifier.padding(start = 48.dp, end = 12.dp, top = 4.dp, bottom = 4.dp)
+                            )
+                            if (!detectedDevice.serialNumber.isNullOrBlank()) {
+                                Text(
+                                    "Serial: ${detectedDevice.serialNumber}",
+                                    fontSize = 12.sp,
+                                    color = Color(0xFF9A9A9A),
+                                    modifier = Modifier.padding(start = 48.dp, end = 12.dp, top = 4.dp, bottom = 4.dp)
+                                )
+                            }
+                            DropdownMenuItem(
+                                text = { Text("Disconnect sensor", color = Color(0xFFE2504A)) },
+                                leadingIcon = { Icon(Icons.Filled.LinkOff, contentDescription = null, tint = Color(0xFFE2504A)) },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    CameraPreviewFragment.declineConnect()
+                                }
+                            )
+                        } else {
+                            DropdownMenuItem(
+                                text = { Text("No sensor connected", color = Color(0xFF9A9A9A)) },
+                                leadingIcon = { Icon(Icons.Filled.Info, contentDescription = null, tint = Color(0xFF9A9A9A)) },
+                                enabled = false,
+                                onClick = { }
+                            )
                         }
                     }
                 }
@@ -795,6 +885,7 @@ fun DemoScreen() {
                             }
                     )
                 }
+            }
             }
             }
         }
@@ -949,67 +1040,5 @@ fun DemoScreen() {
             }
         }
 
-        // ── Sensor detection popup ──────────────────────────────────────────
-        if (detectedDevice != null && detectedDevice.sequence != dismissedSequence) {
-            val match = SupportedSensors.classify(
-                detectedDevice.vendorId,
-                detectedDevice.productId,
-                detectedDevice.name,
-            )
-            val titleText = when (match.type) {
-                SensorMatchType.KNOWN    -> "Sensor supported"
-                SensorMatchType.PROBABLE -> "Sensor recognized"
-                SensorMatchType.UNKNOWN  -> "Unrecognized sensor"
-            }
-            AlertDialog(
-                onDismissRequest = {
-                    dismissedSequence = detectedDevice.sequence
-                    CameraPreviewFragment.declineConnect()
-                },
-                title = { Text(titleText) },
-                text = {
-                    Column {
-                        Text("Supported sensors:")
-                        SupportedSensors.list.forEach { sensor ->
-                            Text("• ${sensor.displayName}")
-                        }
-                        if (SupportedSensors.list.isEmpty()) {
-                            Text("• (none added yet)")
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("Detected sensor: ${detectedDevice.name}")
-                        Text("Vendor ID: 0x%04X (%d)".format(detectedDevice.vendorId, detectedDevice.vendorId))
-                        Text("Product ID: 0x%04X (%d)".format(detectedDevice.productId, detectedDevice.productId))
-                        Spacer(modifier = Modifier.height(8.dp))
-                        when (match.type) {
-                            SensorMatchType.KNOWN ->
-                                Text("✓ This sensor (${match.sensor?.displayName}) is supported.")
-                            SensorMatchType.PROBABLE ->
-                                Text("≈ This looks like a ${match.sensor?.displayName} " +
-                                        "(new hardware revision). It should work — tap Connect.")
-                            SensorMatchType.UNKNOWN ->
-                                Text("This sensor isn't in the recognized list, but it may " +
-                                        "still work. Tap Connect to try it.")
-                        }
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        dismissedSequence = detectedDevice.sequence
-                        CameraPreviewFragment.confirmConnect()
-                    }) {
-                        Text("Connect")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = {
-                        dismissedSequence = detectedDevice.sequence
-                        CameraPreviewFragment.declineConnect()
-                    }) {
-                        Text("Cancel")
-                    }
-                }
-            )
-        }
     }
 }
