@@ -28,7 +28,8 @@ fun RgbControls(
             valueRange = -50f..50f,
             colors = SliderDefaults.colors(
                 thumbColor = Color.Red,
-                activeTrackColor = Color.Red
+                activeTrackColor = Color.Red,
+                inactiveTrackColor = Color(0xFF4A4A4A)
             )
         )
 
@@ -39,7 +40,8 @@ fun RgbControls(
             valueRange = -50f..50f,
             colors = SliderDefaults.colors(
                 thumbColor = Color.Green,
-                activeTrackColor = Color.Green
+                activeTrackColor = Color.Green,
+                inactiveTrackColor = Color(0xFF4A4A4A)
             )
         )
 
@@ -50,7 +52,8 @@ fun RgbControls(
             valueRange = -50f..50f,
             colors = SliderDefaults.colors(
                 thumbColor = Color.Blue,
-                activeTrackColor = Color.Blue
+                activeTrackColor = Color.Blue,
+                inactiveTrackColor = Color(0xFF4A4A4A)
             )
         )
     }
