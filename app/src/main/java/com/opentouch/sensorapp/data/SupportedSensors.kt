@@ -1,6 +1,23 @@
 package com.opentouch.sensorapp.data
 
 /**
+ * One verified (resolution, frame rate) combination a sensor can actually
+ * stream at. The Settings FPS slider snaps to 0 / half / max of a sensor's
+ * rated max fps; [ResolutionFpsOption.fps] values are matched against
+ * whichever of those the slider is at to decide which resolution(s) to
+ * offer - see SupportedSensor.resolutionOptionsForFps(). This is a plain
+ * data list rather than logic branching on literal fps values so that
+ * adding a sensor, or adding a newly-verified combo to an existing one,
+ * never requires touching UI code - see the 3 July 2026 research diary
+ * entry on this requirement.
+ */
+data class ResolutionFpsOption(
+    val width: Int,
+    val height: Int,
+    val fps: Int,
+)
+
+/**
  * A sensor model the app recognizes, identified by USB Vendor ID and one or
  * more Product IDs. A sensor can report different Product IDs across hardware
  * revisions (e.g. GelSight Mini "R0B" vs a later board), so each model holds a
@@ -31,9 +48,27 @@ data class SupportedSensor(
     val nativeHeight: Int,
     /** Folder-safe name used for this sensor's subfolder under Pictures/Open_Touch/ and Movies/Open_Touch/. */
     val folderName: String,
+    /**
+     * Every verified (resolution, fps) combination this sensor can stream.
+     * Kept separate from [maxFps]/[nativeWidth]/[nativeHeight] (which stay as
+     * the single manufacturer-rated "native" spec used elsewhere) so this list
+     * can grow independently as more combos get verified on real hardware.
+     */
+    val resolutionFpsOptions: List<ResolutionFpsOption> = emptyList(),
 ) {
     /** Native streaming resolution as "WxH" for display. */
     val nativeResolution: String get() = "${nativeWidth}x${nativeHeight}"
+
+    /**
+     * Resolutions valid at exactly [fps]. Falls back to the single native
+     * resolution when no combo has been verified yet at that rate (e.g. a
+     * sensor whose only confirmed spec is its max fps) so the picker always
+     * has something sane to show instead of coming up empty.
+     */
+    fun resolutionOptionsForFps(fps: Int): List<ResolutionFpsOption> {
+        val matches = resolutionFpsOptions.filter { it.fps == fps }
+        return matches.ifEmpty { listOf(ResolutionFpsOption(nativeWidth, nativeHeight, fps)) }
+    }
 }
 
 enum class SensorMatchType { KNOWN, PROBABLE, UNKNOWN }
@@ -55,6 +90,19 @@ object SupportedSensors {
             nativeWidth = 320,     // DIGIT streams 320x240
             nativeHeight = 240,
             folderName = "Digit",
+            // 640x480 @ 30fps was listed here as "verified" (research diary,
+            // 04.06.2026 meeting notes), but real-device testing confirmed
+            // the sensor actually rejects it - the native camera library
+            // logs "setPreviewSize failed(format is 1), try to use other
+            // format..." and then crashes (native SIGABRT inside
+            // UVCPreview::stopPreview(), a bug in the vendored camera
+            // library when cleaning up after a preview that never
+            // successfully started). Removed until 640x480 can be properly
+            // re-verified - only the two confirmed-working combos remain.
+            resolutionFpsOptions = listOf(
+                ResolutionFpsOption(320, 240, 30),
+                ResolutionFpsOption(320, 240, 60),
+            ),
         ),
         SupportedSensor(
             displayName = "GelSight Mini",
@@ -66,6 +114,12 @@ object SupportedSensors {
             nativeWidth = 320,     // streams a downsampled image (~320x240);
             nativeHeight = 240,    // verify against getAllPreviewSizes() at runtime
             folderName = "GelSightMini",
+            // Only the datasheet max-fps combo is verified so far - no unit to
+            // test against yet. resolutionOptionsForFps() falls back to this
+            // native size at other fps steps until real combos are measured.
+            resolutionFpsOptions = listOf(
+                ResolutionFpsOption(320, 240, 25),
+            ),
         ),
     )
 
