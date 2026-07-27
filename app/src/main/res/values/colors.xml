@@ -3,4 +3,12 @@
     <color name="bg_dark">#1E1E1E</color>
     <color name="panel_dark">#2D2D2D</color>
     <color name="text_light">#FFFFFF</color>
+
+    <!-- Reconnect button - same violet accent used across the rest of the
+         app (see AccentDark in ui/theme/Color.kt), plus a lighter ripple
+         tint for the press feedback and a light lavender for text/icon so
+         it reads clearly against the solid fill. -->
+    <color name="accent_violet">#594BA0</color>
+    <color name="accent_violet_ripple">#7F77DD</color>
+    <color name="text_on_accent_violet">#EEEDFE</color>
 </resources>

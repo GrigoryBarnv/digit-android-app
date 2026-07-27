@@ -70,7 +70,22 @@
             android:layout_marginTop="12dp"
             android:layout_gravity="center"
             android:text="@string/reconnect_button"
-            android:visibility="gone" />
+            android:visibility="gone"
+            android:background="@drawable/bg_reconnect_button"
+            android:drawableStart="@drawable/ic_reconnect"
+            android:drawablePadding="8dp"
+            android:paddingStart="20dp"
+            android:paddingEnd="24dp"
+            android:paddingTop="10dp"
+            android:paddingBottom="10dp"
+            android:textColor="@color/text_on_accent_violet"
+            android:textAllCaps="false"
+            android:textSize="14sp"
+            android:fontFamily="sans-serif-medium"
+            android:minWidth="0dp"
+            android:minHeight="0dp"
+            android:stateListAnimator="@null"
+            android:elevation="0dp" />
 
     </LinearLayout>
 
