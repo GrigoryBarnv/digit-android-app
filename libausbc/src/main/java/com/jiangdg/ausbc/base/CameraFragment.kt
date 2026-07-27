@@ -50,6 +50,18 @@ abstract class CameraFragment : BaseFragment(), ICameraStateCallBack {
         AtomicBoolean(false)
     }
 
+    // Lets a subclass veto a permission (re)request for a device onAttachDev
+    // just saw. Needed because registerMultiCamera() gets called again on
+    // every onPause()/onResume() cycle (confirmed via on-device tracing that
+    // showing the system "Allow app to access <device>?" dialog itself
+    // triggers this fragment's onPause()/onResume() on multiple phones/
+    // OEMs), and re-registering can re-fire onAttachDev for a device that
+    // never actually detached - which would otherwise call
+    // requestPermission() again and pop a brand new copy of the same
+    // dialog. Default is "always allow" so existing behavior is unchanged
+    // unless a subclass overrides this.
+    protected open fun shouldRequestPermission(device: UsbDevice): Boolean = true
+
     override fun initView() {
         when (val cameraView = getCameraView()) {
             is TextureView -> {
@@ -96,6 +108,9 @@ abstract class CameraFragment : BaseFragment(), ICameraStateCallBack {
                     // Initiate permission request when device insertion is detected
                     // If you want to open the specified camera, you need to override getDefaultCamera()
                     if (mRequestPermission.get()) {
+                        return@let
+                    }
+                    if (!shouldRequestPermission(device)) {
                         return@let
                     }
                     getDefaultCamera()?.apply {
@@ -160,6 +175,7 @@ abstract class CameraFragment : BaseFragment(), ICameraStateCallBack {
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
+                onPermissionDenied(device)
             }
         })
         mCameraClient?.register()
@@ -173,6 +189,16 @@ abstract class CameraFragment : BaseFragment(), ICameraStateCallBack {
         mCameraClient?.unRegister()
         mCameraClient?.destroy()
         mCameraClient = null
+        // mRequestPermission is otherwise only cleared by onDetachDec/
+        // onDisConnectDec/onCancelDev - all callbacks on the USBMonitor
+        // listener that this unRegister() call just tore down. Without this,
+        // a permission granted before this teardown (e.g. before the app was
+        // backgrounded with the sensor still attached) leaves the flag stuck
+        // at true, so onAttachDev()'s guard silently skips re-requesting
+        // permission for the same device on the next registerMultiCamera(),
+        // and the caller's own "USB device detected. Requesting
+        // permission..." retry loop never actually completes.
+        mRequestPermission.set(false)
     }
 
     protected fun getDeviceList() = mCameraClient?.getDeviceList()
@@ -281,6 +307,18 @@ abstract class CameraFragment : BaseFragment(), ICameraStateCallBack {
      * @return Open camera by default, should be [UsbDevice]
      */
     protected open fun getDefaultCamera(): UsbDevice? = null
+
+    /**
+     * Called when the user taps "Cancel"/"Deny" on the system
+     * "Allow <app> to access <device>?" permission dialog. The base class
+     * only resets its own internal state here (see onCancelDev above) - it
+     * does not touch any UI, so a caller that keeps re-requesting permission
+     * on a timer (e.g. while waiting for a device to appear) would otherwise
+     * just pop the same system dialog again on the next tick. Override this
+     * to stop any such retry and show the user a clear "permission denied"
+     * state instead.
+     */
+    protected open fun onPermissionDenied(device: UsbDevice?) {}
 
     /**
      * Capture image
