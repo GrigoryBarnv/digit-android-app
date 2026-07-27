@@ -40,7 +40,6 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LinkOff
@@ -94,6 +93,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
 import androidx.fragment.app.FragmentContainerView
 import androidx.fragment.app.commit
+import com.opentouch.sensorapp.data.ResolutionFpsOption
 import com.opentouch.sensorapp.data.SupportedSensors
 import com.opentouch.sensorapp.presentation.component.RgbControls
 import com.opentouch.sensorapp.presentation.component.SensorPreviewShape
@@ -215,6 +215,47 @@ private fun FpsSliderWithLabel(value: Float, onValueChange: (Float) -> Unit, max
     }
 }
 
+/**
+ * Row of resolution chips valid at the FPS panel's current slider position.
+ * Only ever shows resolutions [options] actually lists — the caller is
+ * responsible for narrowing that list to the current fps (see
+ * SupportedSensor.resolutionOptionsForFps()), so this composable has no
+ * hardcoded knowledge of which sensor or fps is involved.
+ */
+@Composable
+private fun ResolutionChipRow(
+    options: List<ResolutionFpsOption>,
+    selected: Pair<Int, Int>?,
+    onSelect: (Pair<Int, Int>) -> Unit,
+) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        options.forEach { option ->
+            val isSelected = selected == (option.width to option.height)
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (isSelected) Color(0xFF3C3489) else Color.Transparent)
+                    .border(
+                        1.dp,
+                        if (isSelected) Color(0xFF7F77DD) else Color(0xFF4A4A4A),
+                        RoundedCornerShape(8.dp)
+                    )
+                    .clickable { onSelect(option.width to option.height) }
+                    .padding(vertical = 10.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "${option.width} x ${option.height}",
+                    color = if (isSelected) Color(0xFFEEEDFE) else Color(0xFFB4B2A9),
+                    fontSize = 12.sp,
+                    fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal
+                )
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DemoScreen() {
@@ -224,6 +265,10 @@ fun DemoScreen() {
     var showRgbControls by remember { mutableStateOf(false) }
     var showFpsControls by remember { mutableStateOf(false) }
     val fpsSlider = remember { mutableFloatStateOf(0f) }
+    // Resolution chosen in the FPS panel's resolution row - null means "no
+    // explicit choice yet this session", in which case the panel falls back
+    // to the first option valid for the current slider position.
+    val selectedResolution = remember { mutableStateOf<Pair<Int, Int>?>(null) }
     // Gallery bottom sheet
     var galleryApps by remember { mutableStateOf<List<GalleryApp>>(emptyList()) }
     val gallerySheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -651,6 +696,7 @@ fun DemoScreen() {
                                 if (ratedFps != null) {
                                     fpsSlider.floatValue =
                                         (CameraPreviewFragment.targetFps.value ?: ratedFps).toFloat()
+                                    selectedResolution.value = CameraPreviewFragment.targetResolution.value
                                     showSettingsMenu = false
                                     showRgbControls = false
                                     showFpsControls = true
@@ -670,59 +716,6 @@ fun DemoScreen() {
                                 showRgbControls = true
                             }
                         )
-
-                        HorizontalDivider()
-
-                        // ── Resolution — read-only: spec + live device sizes. ──
-                        // These sensors are fixed-format, so this is info, not a
-                        // selector. The spec comes from SupportedSensors; the
-                        // live list is what the device actually advertises.
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    if (matchedSensor != null)
-                                        "Resolution: ${matchedSensor.nativeResolution} (native)"
-                                    else
-                                        "Resolution",
-                                    color = Color.White
-                                )
-                            },
-                            leadingIcon = { Icon(Icons.Filled.AspectRatio, contentDescription = null, tint = Color.White) },
-                            enabled = false,
-                            onClick = { }
-                        )
-
-                        // Live device-reported sizes, listed beneath.
-                        val liveSizes = remember(showSettingsMenu) {
-                            CameraPreviewFragment.supportedSizes()
-                        }
-                        if (liveSizes.isEmpty()) {
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        "   (no sizes reported — connect a sensor)",
-                                        fontSize = 12.sp,
-                                        color = Color(0xFF9A9A9A),
-                                    )
-                                },
-                                enabled = false,
-                                onClick = { }
-                            )
-                        } else {
-                            liveSizes.forEach { size ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            "   • ${size.width}x${size.height}",
-                                            fontSize = 12.sp,
-                                            color = Color(0xFF9A9A9A),
-                                        )
-                                    },
-                                    enabled = false,
-                                    onClick = { }
-                                )
-                            }
-                        }
 
                         HorizontalDivider()
 
@@ -977,11 +970,48 @@ fun DemoScreen() {
                         )
                     }
 
+                    // ── Resolution — narrowed to whatever's actually valid at
+                    // the slider's current (snapped) fps. See
+                    // SupportedSensor.resolutionOptionsForFps().
+                    val snappedFps = fpsSlider.floatValue.roundToInt()
+                    val verifiedAtFps = matchedSensor.resolutionFpsOptions.filter { it.fps == snappedFps }
+                    val resolutionOptions = matchedSensor.resolutionOptionsForFps(snappedFps)
+                    val effectiveResolution = selectedResolution.value
+                        ?.takeIf { sel -> resolutionOptions.any { it.width == sel.first && it.height == sel.second } }
+                        ?: resolutionOptions.firstOrNull()?.let { it.width to it.height }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text("Resolution", color = Color.White, fontWeight = FontWeight.Medium)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    ResolutionChipRow(
+                        options = resolutionOptions,
+                        selected = effectiveResolution,
+                        onSelect = { selectedResolution.value = it }
+                    )
+                    when {
+                        verifiedAtFps.isEmpty() -> Text(
+                            "No verified resolution data at $snappedFps fps yet — using native ${matchedSensor.nativeResolution}",
+                            fontSize = 11.sp,
+                            color = Color(0xFF9A9A9A),
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                        verifiedAtFps.size == 1 -> Text(
+                            "Only this resolution is verified at $snappedFps fps",
+                            fontSize = 11.sp,
+                            color = Color(0xFF9A9A9A),
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                        else -> {}
+                    }
+
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Button(
                         onClick = {
-                            CameraPreviewFragment.requestSetFps(fpsSlider.floatValue.roundToInt())
+                            CameraPreviewFragment.requestSetFps(snappedFps)
+                            effectiveResolution?.let { (w, h) ->
+                                CameraPreviewFragment.requestSetResolution(w, h)
+                            }
                             showFpsControls = false
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -1039,6 +1069,5 @@ fun DemoScreen() {
                 Spacer(modifier = Modifier.navigationBarsPadding())
             }
         }
-
     }
 }

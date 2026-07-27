@@ -7,5 +7,8 @@
     <string name="camera_disconnected">Camera disconnected. Please connect again.</string>
     <string name="sensor_disconnected_declined">Sensor disconnected.</string>
     <string name="reconnect_button">Reconnect</string>
+    <string name="sensor_stalled_retry">Still not connected. Tap Reconnect to try again.</string>
+    <string name="permission_denied_retry">Access denied. Want to reconnect?</string>
+    <string name="permission_no_response_retry">No response. Want to reconnect?</string>
     <string name="camera_error">Camera error: %1$s</string>
 </resources>

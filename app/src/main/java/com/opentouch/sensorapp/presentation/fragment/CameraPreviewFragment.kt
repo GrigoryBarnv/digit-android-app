@@ -3,6 +3,9 @@ package com.opentouch.sensorapp.presentation.fragment
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.Manifest
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
+import android.content.Context
 import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
@@ -81,6 +84,17 @@ class CameraPreviewFragment : CameraFragment() {
     // Guards against onCameraState(CLOSED) restarting the permission-retry
     // loop as a side effect of the unregister we do in onPause() below.
     private var isPausedForBackground = false
+
+    // True after the user explicitly taps Cancel/Deny on the system
+    // "Allow OpenTouch to access <device>?" dialog, until they tap
+    // Reconnect (or the device is unplugged). While true, onResume() must
+    // NOT re-register the camera monitor: showing the system dialog itself
+    // triggers onPause()/onResume() on this fragment (it's a new foreground
+    // window, same as pressing Home), and re-registering there replays the
+    // library's onAttachDev auto-permission-request for the still-attached
+    // device - popping the exact same dialog right back up and making
+    // Cancel look like it does nothing.
+    private var awaitingManualReconnect = false
 
     // ─── FPS measurement (read-only display in Settings) ──────────────────────
     // Counts preview frames between samples. Incremented on the camera thread,
@@ -207,8 +221,12 @@ class CameraPreviewFragment : CameraFragment() {
         // becomes portrait-shaped to match the rotated image.
         val isQuarterTurn = SENSOR_ROTATE_TYPE == RotateType.ANGLE_90 ||
                 SENSOR_ROTATE_TYPE == RotateType.ANGLE_270
-        val width = if (isQuarterTurn) 240 else 320
-        val height = if (isQuarterTurn) 320 else 240
+        // Base (unrotated) size the user picked via the Settings resolution
+        // row - see changePreviewResolution(). Falls back to the 320x240
+        // default when nothing has been explicitly requested yet.
+        val (baseWidth, baseHeight) = _targetResolution.value ?: (320 to 240)
+        val width = if (isQuarterTurn) baseHeight else baseWidth
+        val height = if (isQuarterTurn) baseWidth else baseHeight
 
         return CameraRequest.Builder()
             .setPreviewWidth(width)
@@ -216,7 +234,17 @@ class CameraPreviewFragment : CameraFragment() {
             .setRenderMode(CameraRequest.RenderMode.OPENGL)
             .setDefaultRotateType(SENSOR_ROTATE_TYPE)
 
-            .setPreviewFormat(CameraRequest.PreviewFormat.FORMAT_MJPEG)
+            // DIGIT/GelSight Mini are small raw-sensor UVC devices with no
+            // onboard JPEG encoder - they reject a FORMAT_MJPEG request
+            // outright (confirmed via real-device logs: "setPreviewSize
+            // failed(format is 1)", where 1 = FRAME_FORMAT_MJPEG). The
+            // vendored library then falls back to FORMAT_YUYV internally,
+            // but that fallback path has a native bug (a SIGABRT inside
+            // UVCPreview::stopPreview(), joining a preview thread that was
+            // never started - see CameraUVC.kt's catch block). Requesting
+            // YUYV directly here skips the failing MJPEG attempt entirely,
+            // so the crashy fallback path never runs.
+            .setPreviewFormat(CameraRequest.PreviewFormat.FORMAT_YUYV)
             .setAspectRatioShow(true)
             .setCaptureRawImage(false)
             .setRawPreviewData(false)
@@ -225,12 +253,52 @@ class CameraPreviewFragment : CameraFragment() {
 
     override fun initData() {
         super.initData()
+        // Reset all "attempt in progress" tracking for a genuinely fresh
+        // start. These are companion-level (so they survive across
+        // onPause/onResume restarts during a single attempt, on purpose -
+        // see their individual comments), but that also means a stale
+        // value left over from an earlier attempt in this same app
+        // process could otherwise immediately make a brand new plug-in
+        // look like it's already been waiting for 6+ seconds, skipping
+        // straight to "Access denied" without ever actually asking.
+        firstUnconnectedSeenAt = null
+        lastPermissionRequestKey = null
+        permissionRequestPending = false
+        permissionRequestedAt = null
+        awaitingManualReconnect = false
+        isPausedForBackground = false
         showWaitingForSensor()
         startPermissionOpenRetry(initialDelayMs = 600)
     }
 
     override fun onResume() {
         super.onResume()
+        if (permissionRequestPending) {
+            // A request survived this pause/resume cycle. Showing the
+            // system "Allow app to access <device>?" dialog is what
+            // triggers this fragment's onPause() in the first place
+            // (confirmed repeatedly via on-device tracing) - so onResume()
+            // firing again while a request is STILL pending means the
+            // dialog has almost certainly just been dismissed by some tap.
+            // This is a far more precise "the dialog is no longer sitting
+            // open on screen" signal than counting elapsed time from when
+            // the request was originally sent, which could fire while the
+            // user is still legitimately reading a dialog they haven't
+            // tapped yet - see the give-up check in
+            // startPermissionOpenRetry() for how this timestamp is used.
+            permissionRequestedAt = System.currentTimeMillis()
+        }
+        if (awaitingManualReconnect) {
+            // Stay fully idle - don't re-register the camera monitor or
+            // restart the retry loop - until the user explicitly taps
+            // Reconnect. See the comment on awaitingManualReconnect above
+            // for why this guard exists. (isPausedForBackground is left
+            // alone here on purpose: registerMultiCamera() was already torn
+            // down by onPermissionDenied(), same as a real onPause() would
+            // have done, so this flag still correctly means "not currently
+            // registered".)
+            return
+        }
         if (isPausedForBackground) {
             // Undo the onPause() teardown below: re-register so the camera
             // can be detected/opened again now that the app is visible.
@@ -260,6 +328,22 @@ class CameraPreviewFragment : CameraFragment() {
         // merely backgrounded. So it kept popping the same system dialog in
         // the background even after the fix above. Unregistering it here,
         // and re-registering in onResume(), closes that gap too.
+        //
+        // EXCEPT while a permission request is genuinely pending
+        // (permissionRequestPending). Root cause found via on-device
+        // tracing: showing the system "Allow app to access <device>?"
+        // dialog triggers THIS onPause() within milliseconds on more than
+        // one phone, and unRegisterMultiCamera() tears down the exact
+        // broadcast receiver that's supposed to catch the user's eventual
+        // Cancel/OK answer (USBMonitor scopes that receiver to an action
+        // string unique to its own instance - see USBMonitor.java). Tearing
+        // it down here orphaned every single permission request, which is
+        // why onCancelDev() never fired no matter what was tapped. So:
+        // leave the camera client alone while an answer is still pending -
+        // only cancel our own polling loop, same as always.
+        if (permissionRequestPending) {
+            return
+        }
         isPausedForBackground = true
         unRegisterMultiCamera()
     }
@@ -286,6 +370,9 @@ class CameraPreviewFragment : CameraFragment() {
                 _binding?.reconnectButton?.visibility = View.GONE
                 applyRgb(pendingRed, pendingGreen, pendingBlue)
                 permissionRetryJob?.cancel()
+                firstUnconnectedSeenAt = null
+                permissionRequestPending = false
+                permissionRequestedAt = null
 
                 // Start measuring FPS: attach the lightweight frame counter and
                 // begin the once-per-second sampler.
@@ -306,9 +393,10 @@ class CameraPreviewFragment : CameraFragment() {
                         lastDetectedDeviceKey = key
                         detectionSequence++
                         _connectDecision = ConnectDecision.NONE
-                        // New physical sensor - forget any FPS choice made
-                        // for a previously connected sensor.
+                        // New physical sensor - forget any FPS/resolution
+                        // choice made for a previously connected sensor.
                         _targetFps.value = null
+                        _targetResolution.value = null
                     }
                     // Always refresh detectedDevice while a sensor is attached
                     // and the camera is open - even on an internal reopen with
@@ -399,6 +487,84 @@ class CameraPreviewFragment : CameraFragment() {
         activeInstance = this
     }
 
+    // Breaks the repeated-dialog cycle: registerMultiCamera() gets called
+    // again on every onPause()/onResume(), and showing the system "Allow
+    // app to access <device>?" dialog itself triggers that pause/resume on
+    // several phones we've tested (Vivo AND Samsung, so it isn't just one
+    // OEM) - so re-registering can re-fire onAttachDev for a device that
+    // never actually detached, which used to call requestPermission()
+    // again and pop a brand new copy of the same dialog every couple of
+    // seconds. This vetoes a repeat request for the same device within a
+    // short window, so only the first request in a burst actually shows a
+    // dialog - the user gets one dialog, not an endless series of them.
+    override fun shouldRequestPermission(device: UsbDevice): Boolean {
+        val key = "${device.vendorId}:${device.productId}:${device.deviceName}"
+        val now = System.currentTimeMillis()
+        // Covers the onPause/onResume flicker some phones show the instant
+        // the system dialog appears: without this, that flicker can re-fire
+        // onAttachDev() for the same still-attached device and pop a SECOND
+        // copy of the same dialog on top of the first, forcing the user to
+        // dismiss it twice.
+        if (key == lastPermissionRequestKey && now - lastPermissionRequestAt < 9_000) {
+            return false
+        }
+        lastPermissionRequestKey = key
+        lastPermissionRequestAt = now
+        permissionRequestPending = true
+        // NOTE: permissionRequestedAt (the give-up clock) is NOT set here.
+        // It's only set in onResume() once we know the dialog this request
+        // triggered has actually closed - see that comment for why. Setting
+        // it here instead would start the clock the instant we ASK, which
+        // could fire while the user is still legitimately reading a dialog
+        // they haven't tapped yet.
+        // A request reaching this point (about to actually show the system
+        // dialog) can come from the library's OWN attach-detection path
+        // (onAttachDev's fallback/default branches in CameraFragment.kt),
+        // NOT just our own startPermissionOpenRetry() loop. That library
+        // path never touches our status text/reconnect button - only our
+        // loop's own request branch did. So if the screen was last showing
+        // "Access denied. Want to reconnect?" (or any other leftover
+        // state) from a previous attempt, and a fresh attach then fires a
+        // request through the library's path instead of our loop's, the
+        // dialog would pop up right over that stale text - looking like
+        // Access Denied was showing at the same moment as the dialog.
+        // Clearing it here covers every path that can trigger a real
+        // permission request, not just our own.
+        hideSupportedModelsList()
+        _binding?.statusText?.text = getString(R.string.camera_detected_requesting_permission)
+        _binding?.reconnectButton?.visibility = View.GONE
+        return true
+    }
+
+    /**
+     * Called by the library when the user taps Cancel/Deny on the system
+     * "Allow OpenTouch to access <device>?" dialog. Without this override,
+     * the permission retry loop in [startPermissionOpenRetry] would just
+     * call requestPermission() again on its next 500ms tick, popping the
+     * exact same system dialog straight back up - so an explicit Cancel
+     * needs to stop that loop and hand control back to the user via the
+     * Reconnect button instead of silently re-prompting.
+     */
+    override fun onPermissionDenied(device: UsbDevice?) {
+        permissionRetryJob?.cancel()
+        hideSupportedModelsList()
+        _binding?.statusText?.text = getString(R.string.permission_denied_retry)
+        _binding?.reconnectButton?.visibility = View.VISIBLE
+        // Stop everything until the user explicitly taps Reconnect. See the
+        // comment on awaitingManualReconnect for why: showing this very
+        // dialog already triggered onPause() on this fragment (a new
+        // foreground window does that, same as pressing Home), so without
+        // this guard, onResume() (which fires right after the dialog
+        // closes) would immediately re-register the camera monitor and
+        // replay the auto permission request for the still-attached
+        // device - popping the same dialog straight back up.
+        awaitingManualReconnect = true
+        isPausedForBackground = true
+        permissionRequestPending = false
+        permissionRequestedAt = null
+        unRegisterMultiCamera()
+    }
+
     /**
      * Stops the camera preview/stream. Called when the user taps "Cancel" on
      * the "is this sensor supported?" popup — by that point the library has
@@ -412,23 +578,52 @@ class CameraPreviewFragment : CameraFragment() {
     }
 
     /**
-     * Called when the user taps the "Reconnect" button shown after declining
-     * the sensor popup. Re-requests permission for the still-attached
-     * device, which Android typically grants instantly (no system dialog)
-     * since it was already approved once, re-opening the camera and showing
-     * the sensor popup again.
+     * Called when the user taps the "Reconnect" button - shown either after
+     * declining the sensor popup, or after the permission/attach retry loop
+     * in [startPermissionOpenRetry] stalls without ever connecting. Re-runs
+     * that same retry loop from a clean state rather than firing a single
+     * one-shot request, so a repeat stall still leaves this button visible
+     * instead of going silent again.
      */
     private fun onReconnectClicked() {
         _binding?.reconnectButton?.visibility = View.GONE
         pausedForZeroFps = false
-        val device = getDeviceList()?.firstOrNull()
+        firstUnconnectedSeenAt = null
+        if (awaitingManualReconnect) {
+            // awaitingManualReconnect becomes true via onPermissionDenied()
+            // (an explicit Cancel) or via the give-up check in
+            // startPermissionOpenRetry() (confirmed via hasUsbPermission()
+            // once the dialog is closed) - both already unregister the
+            // camera monitor themselves once they've confirmed a real
+            // outcome, so this call is normally a harmless no-op. Kept for
+            // safety/clarity and to cover the post-loop "stuck in bootloader
+            // the whole 30s" safety net, which also sets this flag.
+            // unRegisterMultiCamera() is safe to call even if already
+            // unregistered.
+            unRegisterMultiCamera()
+            permissionRequestPending = false
+            permissionRequestedAt = null
+            // Undo the teardown from onPermissionDenied() so the camera
+            // monitor is watching for the device again.
+            awaitingManualReconnect = false
+            isPausedForBackground = false
+            registerMultiCamera()
+        } else {
+            permissionRequestPending = false
+            permissionRequestedAt = null
+        }
+        // See firstRecognizedDevice() - ignores unrecognized USB devices
+        // (e.g. an OTG adapter with nothing attached yet) so tapping
+        // Reconnect with only one of those present correctly shows "Waiting
+        // for Touch Sensor" instead of falsely claiming a device was found.
+        val device = firstRecognizedDevice()
         if (device != null) {
             // Explicit Reconnect tap — allow the popup to show again for this
             // device by forgetting the previously-shown key.
             lastDetectedDeviceKey = null
             hideSupportedModelsList()
             _binding?.statusText?.text = getString(R.string.camera_detected_requesting_permission)
-            requestPermission(device)
+            startPermissionOpenRetry(initialDelayMs = 0)
         } else {
             showWaitingForSensor()
             startPermissionOpenRetry(initialDelayMs = 500)
@@ -476,6 +671,21 @@ class CameraPreviewFragment : CameraFragment() {
         // already updated the value the next natural open will use.
     }
 
+    /**
+     * Changes the requested preview resolution. Like [changePreviewFps], the
+     * underlying camera library only reads getCameraRequest() the next time
+     * the stream opens, so this stores the new size and closes the camera to
+     * let the existing auto-reconnect flow reopen it at the new resolution.
+     * [width]/[height] are the sensor's native (unrotated) dimensions - the
+     * portrait swap for the on-screen box happens inside getCameraRequest().
+     */
+    fun changePreviewResolution(width: Int, height: Int) {
+        _targetResolution.value = width to height
+        if (isCameraOpened()) {
+            closeCamera()
+        }
+    }
+
     // ─── Resolution + supported-size helpers (Settings) ───────────────────────
 
     /**
@@ -511,6 +721,52 @@ class CameraPreviewFragment : CameraFragment() {
         val device = getDeviceList()?.firstOrNull() ?: return "Other"
         val match = SupportedSensors.classify(device.vendorId, device.productId, device.productName)
         return match.sensor?.folderName ?: "Other"
+    }
+
+    /**
+     * Like getDeviceList()?.firstOrNull(), but ignores any USB device that
+     * isn't a recognized sensor (or its known transient bootloader
+     * identity). getDeviceList() returns EVERY USB device Android currently
+     * sees - including an OTG adapter/hub that's plugged into the tablet
+     * with nothing on its far end yet, or any other unrelated accessory.
+     * Using the unfiltered list to decide "a sensor was detected" meant the
+     * permission-request/stall-timer flow could fire for a device that was
+     * never going to be our sensor, eventually showing "Access denied"
+     * after ~30s even though no dialog was ever shown and the user hadn't
+     * plugged the sensor in yet - confirmed on-device via video where the
+     * device list clearly reported something before the sensor's own USB
+     * connection request dialog ever appeared.
+     */
+    private fun firstRecognizedDevice(): UsbDevice? {
+        return getDeviceList()?.firstOrNull { device ->
+            val isBootloader = device.vendorId == FTDI_BOOTLOADER_VENDOR_ID &&
+                    device.productId == FT900_DFU_PRODUCT_ID
+            isBootloader || SupportedSensors.classify(
+                device.vendorId, device.productId, device.productName
+            ).sensor != null
+        }
+    }
+
+    /**
+     * Asks Android directly whether USB permission for this device is
+     * currently granted - the exact same check the vendored library's own
+     * requestPermission()/schedulePermissionGrantCheck() trust internally
+     * (see USBMonitor.java). We call this ourselves in
+     * startPermissionOpenRetry()'s give-up check: once onResume() has
+     * confirmed a request's dialog actually closed, Android's permission
+     * state for that device is final, not "still pending" - so this
+     * distinguishes a real grant whose broadcast got lost (hasPermission()
+     * true - fixes "Reconnect skips straight to the live view", since
+     * permission really was already granted) from a real denial (false -
+     * shows "Access denied" instead of the vaguer "No response").
+     */
+    private fun hasUsbPermission(device: UsbDevice): Boolean {
+        return try {
+            (context?.getSystemService(Context.USB_SERVICE) as? UsbManager)
+                ?.hasPermission(device) == true
+        } catch (e: Exception) {
+            false
+        }
     }
 
     /**
@@ -947,12 +1203,87 @@ class CameraPreviewFragment : CameraFragment() {
         permissionRetryJob?.cancel()
         permissionRetryJob = lifecycleScope.launch {
             delay(initialDelayMs)
-            var permissionRequested = false
-            repeat(30) {
+            // Seed from the companion flag, not just false: this loop gets
+            // relaunched fresh on every onResume(), but if a request from
+            // a PREVIOUS run of this loop is still genuinely awaiting an
+            // answer, we must not re-request just because this particular
+            // run is new - see permissionRequestPending's comment.
+            var permissionRequested = permissionRequestPending
+            // Tracks whether ANY device showed up at all during this run.
+            // Only used below to tell "a sensor sat here stuck in its
+            // bootloader identity the whole 30s, never even getting to a
+            // real request" (worth surfacing) apart from "nothing has been
+            // plugged in this whole time" (the normal waiting state).
+            var everSawDevice = false
+            // "Access denied. Want to reconnect?" and "No response. Want to
+            // reconnect?" are now resolved with real evidence, not a guess:
+            // once onResume() confirms a pending request's dialog has
+            // actually closed (permissionRequestedAt gets set there - see
+            // that comment), Android's own hasUsbPermission() check below
+            // gives a FINAL, authoritative answer for that device - the
+            // same check the vendored library itself trusts internally
+            // (see USBMonitor.requestPermission()'s hasPermission() check
+            // and its schedulePermissionGrantCheck() polling). So:
+            // - hasUsbPermission() true  -> it really WAS granted; the
+            //   broadcast telling us just never arrived. Silently
+            //   re-request (the library detects the existing grant and
+            //   opens the camera directly, no dialog shown again) instead
+            //   of showing anything at all.
+            // - hasUsbPermission() false -> since the dialog is confirmed
+            //   closed, this genuinely means denied (a real Cancel whose
+            //   broadcast got lost, same underlying issue as a lost grant)
+            //   - so THIS shows "Access denied", not a vague "No response".
+            // "No response" is now only a last-resort safety net for the
+            // case where firstDevice is somehow null right at this instant
+            // (so hasUsbPermission() can't even be checked) - a "No
+            // response. Want to reconnect?" string was kept for that.
+            repeat(60) {
                 if (!isAdded || _binding == null) return@launch
                 if (isCameraOpened()) return@launch
-                val firstDevice = getDeviceList()?.firstOrNull()
+                // See firstRecognizedDevice() - ignores unrecognized USB
+                // devices (e.g. an OTG adapter with nothing attached yet)
+                // so they can't trigger the permission/stall flow. Read
+                // once per iteration and reused below by the give-up check,
+                // which needs to know which device a pending request was
+                // actually for.
+                val firstDevice = firstRecognizedDevice()
+                // permissionRequestedAt is set in onResume() - see that
+                // comment - ONLY once we know this request's dialog has
+                // actually closed (onResume() firing again while a request
+                // is still pending). So this is "give up ~5s after we know
+                // the dialog closed with no answer following", NOT "~5s
+                // since we sent the request" - it deliberately can't fire
+                // while the dialog is still legitimately open on screen,
+                // no matter how long that takes.
+                val requestedAt = permissionRequestedAt
+                if (permissionRequested && requestedAt != null &&
+                    System.currentTimeMillis() - requestedAt >= 5_000
+                ) {
+                    if (firstDevice != null && hasUsbPermission(firstDevice)) {
+                        permissionRequestedAt = null
+                        requestPermission(firstDevice)
+                        return@repeat
+                    }
+                    hideSupportedModelsList()
+                    _binding?.statusText?.text = getString(
+                        if (firstDevice != null) R.string.permission_denied_retry
+                        else R.string.permission_no_response_retry
+                    )
+                    _binding?.reconnectButton?.visibility = View.VISIBLE
+                    awaitingManualReconnect = true
+                    isPausedForBackground = true
+                    // Confirmed denial (or the rare case firstDevice was
+                    // null right here) - safe to actually clear the pending
+                    // state and tear the monitor down now, unlike before:
+                    // hasUsbPermission() just gave us a FINAL answer, so
+                    // there's nothing left in flight to orphan.
+                    permissionRequestPending = false
+                    permissionRequestedAt = null
+                    unRegisterMultiCamera()
+                    return@launch
+                }
                 if (firstDevice != null) {
+                    everSawDevice = true
                     // The sensor's FTDI FT900 chip briefly shows up as its own
                     // bootloader ("FT900 DFU Mode") for a second or two while it
                     // boots, before re-enumerating as the real "DIGIT" sensor.
@@ -973,21 +1304,54 @@ class CameraPreviewFragment : CameraFragment() {
                     }
                     ftdiBootloaderPollCount = 0
 
+                    // See the comment on firstUnconnectedSeenAt: this survives
+                    // the loop itself being cancelled/restarted (e.g. by the
+                    // onPause/onResume flicker some phones show while the
+                    // permission dialog is up).
+                    //
+                    // No fast-fail timer here anymore - an explicit Cancel
+                    // is handled instantly via onPermissionDenied() below,
+                    // and otherwise we simply wait, no matter how long the
+                    // dialog rendering, the user reading/tapping it, the
+                    // grant round-trip, or the camera actually opening
+                    // takes.
                     if (!permissionRequested) {
                         // First time we see the device — request permission,
                         // which shows the "Allow OpenTouch to access …?" dialog.
                         hideSupportedModelsList()
                         _binding?.statusText?.text = getString(R.string.camera_detected_requesting_permission)
+                        // A Reconnect button left over from an earlier stall/
+                        // denial contradicts "requesting permission..." being
+                        // shown at the same time — clear it now that we're
+                        // actively back in a request attempt.
+                        _binding?.reconnectButton?.visibility = View.GONE
+                        permissionRequestPending = true
+                        // NOTE: permissionRequestedAt is NOT set here - see
+                        // the NOTE in shouldRequestPermission() for why; it's
+                        // only set once onResume() confirms this dialog has
+                        // actually closed.
                         requestPermission(firstDevice)
                         permissionRequested = true
                     } else {
-                        // Permission was already requested (user either tapped OK
-                        // and the camera is still opening, or tapped Cancel and
-                        // we're re-requesting on the next poll). Show a message
-                        // that reflects the actual state — not "requesting" again.
-                        hideSupportedModelsList()
-                        _binding?.statusText?.text = getString(R.string.camera_detected_requesting_permission)
-                        requestPermission(firstDevice)
+                        // Permission was already requested and we're just
+                        // waiting for the user to answer the system dialog
+                        // (or for the camera to finish opening after they hit
+                        // OK). Do NOT call requestPermission() again here -
+                        // that used to happen on every 500ms tick as a
+                        // workaround, but it re-issues a brand new request
+                        // while the first one is still pending. That new
+                        // request pops the same system dialog right back up
+                        // moments after the user taps Cancel, racing against
+                        // onPermissionDenied()'s job cancellation - which is
+                        // exactly why Cancel looked like it did nothing.
+                        // Just leave the state as-is and let onConnectDev
+                        // (granted) or onPermissionDenied (denied) decide
+                        // what happens next. No early "still waiting" UI
+                        // here - an explicit Cancel already shows "Access
+                        // denied..." instantly via onPermissionDenied(), and
+                        // the give-up check above (once onResume() confirms
+                        // the dialog closed) covers the OS silently dropping
+                        // the answer entirely.
                     }
                 } else {
                     // No device connected (genuine unplug) — reset so the next
@@ -996,8 +1360,40 @@ class CameraPreviewFragment : CameraFragment() {
                     permissionRequested = false
                     lastDetectedDeviceKey = null
                     _detectedDevice.value = null
+                    firstUnconnectedSeenAt = null
+                    lastPermissionRequestKey = null
+                    permissionRequestPending = false
+                    permissionRequestedAt = null
+                    ftdiBootloaderPollCount = 0
+                    // A Reconnect button left over from an earlier stall/
+                    // denial doesn't make sense once there's genuinely
+                    // nothing plugged in - hide it so the passive "waiting"
+                    // state doesn't show a button with nothing to reconnect
+                    // to.
+                    _binding?.reconnectButton?.visibility = View.GONE
                 }
                 delay(500)
+            }
+            // Reached once all 60 attempts (~30s) of this run pass without
+            // the camera opening. If a request is still pending, the give-up
+            // check above will already have handled it once its dialog
+            // closes (or will on a future run) - this is only reached extra
+            // for the case where a device
+            // sat here the WHOLE 30s without a request ever being made at
+            // all (e.g. stuck in the FTDI bootloader identity way longer
+            // than its usual ~6s). No dialog was ever shown here either, so
+            // same "No response" wording, not "Access denied".
+            if (isAdded && _binding != null && !isCameraOpened()) {
+                if (everSawDevice && !permissionRequested) {
+                    hideSupportedModelsList()
+                    _binding?.statusText?.text = getString(R.string.permission_no_response_retry)
+                    _binding?.reconnectButton?.visibility = View.VISIBLE
+                    awaitingManualReconnect = true
+                    isPausedForBackground = true
+                    unRegisterMultiCamera()
+                } else {
+                    startPermissionOpenRetry(initialDelayMs = 0)
+                }
             }
         }
     }
@@ -1062,10 +1458,85 @@ class CameraPreviewFragment : CameraFragment() {
         private val _targetFps = mutableStateOf<Int?>(null)
         val targetFps: State<Int?> get() = _targetFps
 
+        // The (width, height) the user has requested via the Settings
+        // resolution row. Null means "no explicit choice yet" - DemoScreen
+        // falls back to the connected sensor's native resolution in that
+        // case. Reset to null on a new sensor detection, same as
+        // [_targetFps], so a leftover size from a previous sensor can't leak
+        // into a different one's request.
+        private val _targetResolution = mutableStateOf<Pair<Int, Int>?>(null)
+        val targetResolution: State<Pair<Int, Int>?> get() = _targetResolution
+
         // VID:PID of the last device we showed the popup for. Reset only on a
         // genuine unplug (device list empty) — NOT on the close/reopen of an
         // app resume — so the popup shows once per physical connection.
         private var lastDetectedDeviceKey: String? = null
+
+        // Wall-clock timestamp of the first time we saw a device present but
+        // not yet connected. This is companion-level (survives across
+        // startPermissionOpenRetry() being cancelled and relaunched) on
+        // purpose: on some phones, showing the system permission dialog
+        // causes this fragment's onPause()/onResume() to fire repeatedly
+        // (confirmed via on-device tracing - a phone/OEM quirk, not
+        // something this app controls), which cancels and restarts the
+        // 30-iteration retry loop before it ever completes and before its
+        // own "stalled" fallback can fire. Tracking elapsed real time here
+        // instead of a per-loop-run iteration count means a real stall is
+        // still tracked correctly regardless of how many times the loop
+        // itself got restarted in between.
+        //
+        // The 1.5s fast-fail in startPermissionOpenRetry() only applies
+        // BEFORE permission has been requested - see the comment there for
+        // why it must not keep counting through the dialog-answer/camera-
+        // open phase.
+        private var firstUnconnectedSeenAt: Long? = null
+
+        // See shouldRequestPermission() below - de-dupes repeat permission
+        // requests for the same still-attached device within a short
+        // window, so the onPause/onResume flicker some phones show while
+        // the system dialog is up can't pop a fresh copy of that dialog
+        // every cycle.
+        private var lastPermissionRequestKey: String? = null
+        private var lastPermissionRequestAt: Long = 0L
+
+        // True from the moment we call requestPermission() until we know
+        // the outcome (camera opens, we give up after the 6s stall check,
+        // or the device is unplugged). ROOT CAUSE FOUND: USBMonitor's
+        // permission broadcast receiver is registered under an action
+        // string unique to that USBMonitor INSTANCE
+        // ("com.serenegiant.USB_PERMISSION." + instance hashCode - see
+        // USBMonitor.java). unRegisterMultiCamera() tears that receiver
+        // down. Showing the system "Allow app to access <device>?" dialog
+        // itself triggers this fragment's onPause() within milliseconds
+        // (confirmed via on-device tracing, on more than one phone) - and
+        // onPause() used to unconditionally call unRegisterMultiCamera(),
+        // which destroyed the exact receiver that would have caught the
+        // user's eventual Cancel/OK answer. That's the real reason
+        // onCancelDev() never fired in ANY test, regardless of phone: the
+        // broadcast had nowhere to land by the time the user answered.
+        // While this is true, onPause() must NOT tear down the camera
+        // client - it just cancels our own polling loop instead, and
+        // resumes it (without re-registering) once we're foreground again.
+        private var permissionRequestPending = false
+
+        // Wall-clock time onResume() confirmed a pending request's dialog
+        // has actually closed (set in onResume(), NOT when the request was
+        // originally sent - see that comment for why). Drives the "give up
+        // after ~5s of no answer FOLLOWING the dialog closing" check in
+        // startPermissionOpenRetry() - a safety net for when the OS
+        // silently drops the dialog's answer entirely (confirmed on-device:
+        // 77s of total silence with no callback at all in one test),
+        // separate from the instant, real Cancel handled by
+        // onPermissionDenied(). Once this fires, hasUsbPermission() gives a
+        // final, authoritative answer for what actually happened: silently
+        // re-request and open the camera if it was really granted (broadcast
+        // just got lost), or show "Access denied. Want to reconnect?" if it
+        // wasn't - see the give-up check in startPermissionOpenRetry() for
+        // both branches. Deliberately can't fire while the dialog is still
+        // open on screen, no matter how long that takes - only once it's
+        // confirmed closed does this clock even start. Null whenever no
+        // request is currently pending, or its dialog hasn't closed yet.
+        private var permissionRequestedAt: Long? = null
 
         // Bumped every time a device is (re)detected — see DetectedDevice.sequence.
         private var detectionSequence = 0
@@ -1100,6 +1571,11 @@ class CameraPreviewFragment : CameraFragment() {
         /** Requests a new preview FPS (0 pauses the preview). See [changePreviewFps]. */
         fun requestSetFps(fps: Int) {
             activeInstance?.changePreviewFps(fps)
+        }
+
+        /** Requests a new preview resolution. See [changePreviewResolution]. */
+        fun requestSetResolution(width: Int, height: Int) {
+            activeInstance?.changePreviewResolution(width, height)
         }
 
         /** Sizes the connected sensor supports. Empty if no camera is open. */
