@@ -940,19 +940,40 @@ fun DemoScreen() {
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    Button(
-                        onClick = {
-                            applyRgbToCamera(red.floatValue, green.floatValue, blue.floatValue)
-                            showRgbControls = false
-                        },
+                    Row(
                         modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF5E5D62), contentColor = Color.White),
-                        elevation = ButtonDefaults.buttonElevation(
-                            defaultElevation = 6.dp,
-                            pressedElevation = 1.dp,
-                            hoveredElevation = 8.dp
-                        )
-                    ) { Text("Apply") }
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                red.floatValue = 0f
+                                green.floatValue = 0f
+                                blue.floatValue = 0f
+                                applyRgbToCamera(0f, 0f, 0f)
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF5E5D62), contentColor = Color.White),
+                            elevation = ButtonDefaults.buttonElevation(
+                                defaultElevation = 6.dp,
+                                pressedElevation = 1.dp,
+                                hoveredElevation = 8.dp
+                            )
+                        ) { Text("Reset") }
+
+                        Button(
+                            onClick = {
+                                applyRgbToCamera(red.floatValue, green.floatValue, blue.floatValue)
+                                showRgbControls = false
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF5E5D62), contentColor = Color.White),
+                            elevation = ButtonDefaults.buttonElevation(
+                                defaultElevation = 6.dp,
+                                pressedElevation = 1.dp,
+                                hoveredElevation = 8.dp
+                            )
+                        ) { Text("Apply") }
+                    }
                 }
             }
         }
