@@ -159,7 +159,8 @@ class CameraPreviewFragment : CameraFragment() {
     private fun showWaitingForSensor() {
         _binding?.statusText?.text = getString(R.string.camera_waiting_for_device)
         _binding?.supportedModelsText?.apply {
-            text = "Supported: " + SupportedSensors.list.joinToString(", ") { it.displayName }
+            text = "Supported Sensors:\n" +
+                SupportedSensors.list.joinToString("\n") { "•  ${it.shortName}" }
             visibility = View.VISIBLE
         }
     }

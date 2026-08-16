@@ -40,9 +40,9 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LinkOff
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PhotoLibrary
@@ -84,6 +84,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
@@ -108,6 +109,16 @@ private data class GalleryApp(val label: String, val intent: Intent, val icon: B
  * (56dp -> 60dp) with a stronger shadow - so the active mode or a chosen
  * AI model is unmistakable at a glance. Press feedback is a spring
  * scale-down, matching the shutter button's feel.
+ *
+ * The icon circle is drawn inside a fixed-size [selectedSize] box (not
+ * measured at its animated size directly), and the label sits in a
+ * fixed-width box too. Both exist so the "grow when selected" animation and
+ * varying label lengths ("AI" vs "Model 1" vs "Photo"/"Video") happen
+ * entirely *within* reserved space instead of changing this button's own
+ * measured size - which previously reflowed the whole nav row/bar (and, via
+ * its weight(1f) sibling, the camera preview) by a few pixels every time a
+ * mode or AI model was selected. See Roberto's "dimensions change between
+ * modes" feedback (v1.1.8).
  */
 @Composable
 private fun CircularNavButton(
@@ -122,6 +133,7 @@ private fun CircularNavButton(
     restSize: Dp = 48.dp,
     selectedSize: Dp = 52.dp,
     iconSize: Dp = 19.dp,
+    labelWidth: Dp = 66.dp,
 ) {
     val lilac = Color(0xFF594BA0)
     val interactionSource = remember { MutableInteractionSource() }
@@ -156,23 +168,37 @@ private fun CircularNavButton(
     )
 
     Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(
-            modifier = Modifier
-                .size(size)
-                .graphicsLayer(scaleX = pressScale, scaleY = pressScale)
-                .shadow(elevation, CircleShape)
-                .background(bgColor, CircleShape)
-                .clickable(
-                    interactionSource = interactionSource,
-                    indication = null,
-                    onClick = onClick
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(icon, contentDescription = label, tint = iconColor, modifier = Modifier.size(iconSize))
+        // Fixed-size reserved space - always selectedSize, the largest the
+        // circle ever gets - so the animated inner circle grows/shrinks
+        // in place without changing this Box's (and therefore the Row's)
+        // measured size.
+        Box(modifier = Modifier.size(selectedSize), contentAlignment = Alignment.Center) {
+            Box(
+                modifier = Modifier
+                    .size(size)
+                    .graphicsLayer(scaleX = pressScale, scaleY = pressScale)
+                    .shadow(elevation, CircleShape)
+                    .background(bgColor, CircleShape)
+                    .clickable(
+                        interactionSource = interactionSource,
+                        indication = null,
+                        onClick = onClick
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(icon, contentDescription = label, tint = iconColor, modifier = Modifier.size(iconSize))
+            }
         }
         Spacer(modifier = Modifier.height(6.dp))
-        Text(label, fontSize = 11.sp, color = Color(0xFFC9C9CC), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(
+            label,
+            fontSize = 11.sp,
+            color = Color(0xFFC9C9CC),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.width(labelWidth)
+        )
     }
 }
 
@@ -614,7 +640,7 @@ fun DemoScreen() {
                 // AI button
                 Box {
                     CircularNavButton(
-                        icon = Icons.Filled.AutoAwesome,
+                        icon = Icons.Filled.Memory,
                         label = if (selectedModel == "None") "AI" else selectedModel,
                         selected = selectedModel != "None",
                         restSize = navRestSize,
@@ -867,7 +893,7 @@ fun DemoScreen() {
                             .size(discSize)
                             .graphicsLayer(scaleX = capturePressScale, scaleY = capturePressScale)
                             .alpha(captureButtonAlpha)
-                            .background(if (isRecordingPulse) Color(0xFFE2504A) else Color.White, CircleShape)
+                            .background(if (isVideoMode) Color(0xFFE2504A) else Color.White, CircleShape)
                             .clickable(
                                 enabled = !isCapturing,
                                 interactionSource = captureInteractionSource,
