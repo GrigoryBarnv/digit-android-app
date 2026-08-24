@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Open Touch is a USB sensor camera companion app for DIGIT and GelSight Mini with live preview, capture, recording, RGB controls, and gallery export.">
+  <title>Open Touch | USB Sensor Camera Companion</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="page-shell">
+    <div class="bg-orb bg-orb-a"></div>
+    <div class="bg-orb bg-orb-b"></div>
+
+    <header class="topbar">
+      <a class="brand" href="#top" aria-label="Open Touch home">
+        <span class="brand-mark">OT</span>
+        <span class="brand-copy">
+          <strong>Open Touch</strong>
+          <span>USB sensor camera companion</span>
+        </span>
+      </a>
+
+      <nav class="nav">
+        <a href="#features">Features</a>
+        <a href="#workflow">Workflow</a>
+        <a href="#hardware">Hardware</a>
+        <a href="#download">Download</a>
+        <a href="#faq">FAQ</a>
+      </nav>
+
+      <div class="topbar-actions">
+        <a class="button button-secondary" href="https://github.com/lasr-lab/opentouchapp" target="_blank" rel="noreferrer">GitHub</a>
+        <a class="button button-primary" href="https://github.com/lasr-lab/opentouchapp/releases/latest/download/OpenTouch-latest.apk">Download APK</a>
+      </div>
+
+      <button
+        class="menu-toggle"
+        type="button"
+        aria-label="Open navigation menu"
+        aria-expanded="false"
+        aria-controls="mobile-menu"
+      >
+        <span></span>
+        <span></span>
+        <span></span>
+      </button>
+    </header>
+
+    <div class="mobile-menu-backdrop" hidden></div>
+    <div class="mobile-menu" id="mobile-menu" hidden>
+      <nav class="mobile-nav" aria-label="Mobile navigation">
+        <a href="#features">Features</a>
+        <a href="#workflow">Workflow</a>
+        <a href="#hardware">Hardware</a>
+        <a href="#download">Download</a>
+        <a href="#faq">FAQ</a>
+      </nav>
+      <div class="mobile-menu-actions">
+        <a class="button button-secondary" href="https://github.com/lasr-lab/opentouchapp" target="_blank" rel="noreferrer">GitHub</a>
+        <a class="button button-primary" href="https://github.com/lasr-lab/opentouchapp/releases/latest/download/OpenTouch-latest.apk">Download APK</a>
+      </div>
+    </div>
+
+    <main id="top" class="layout">
+      <section class="hero">
+        <div class="hero-copy">
+          <div class="eyebrow">Representative page for the Android app</div>
+          <h1>Open Touch turns a supported USB sensor into a polished, ready-to-use camera workspace.</h1>
+          <p class="lead">
+            Connect a supported USB sensor, grant access, and use a calm, focused workspace for preview, capture,
+            recording, and quick review.
+          </p>
+
+          <div class="hero-actions">
+            <a class="button button-primary" href="https://github.com/lasr-lab/opentouchapp/releases/latest/download/OpenTouch-latest.apk">Download latest APK</a>
+            <a class="button button-secondary" href="https://github.com/lasr-lab/opentouchapp/blob/main/docs/PROJECT_DOCUMENTATION.md" target="_blank" rel="noreferrer">Read documentation</a>
+          </div>
+
+          <div class="hero-badges" aria-label="Highlights">
+            <span class="pill">No backend</span>
+            <span class="pill">USB host required</span>
+            <span class="pill">Photo + video</span>
+            <span class="pill">Gallery export</span>
+          </div>
+        </div>
+
+        <div class="hero-visual" aria-label="Product dashboard preview">
+          <div class="visual-frame">
+            <div class="visual-topline">
+              <span class="status-dot"></span>
+              <span>Live device session</span>
+              <span class="mono">v1.1.3</span>
+            </div>
+
+            <div class="visual-grid">
+              <div class="preview-panel">
+                <div class="panel-label">Preview</div>
+                <div class="preview-surface">
+                  <div class="preview-ring"></div>
+                  <div class="preview-cutout"></div>
+                  <div class="preview-overlay">
+                    <span>Supported sensor detected</span>
+                    <strong>DIGIT / GelSight Mini</strong>
+                  </div>
+                </div>
+              </div>
+
+              <div class="status-stack">
+                <div class="info-card">
+                  <div class="card-label">Connection</div>
+                  <strong>USB permission granted</strong>
+                  <span>Waiting only until a sensor is attached</span>
+                </div>
+
+                <div class="info-card">
+                  <div class="card-label">Capture</div>
+                  <strong>Photo and video</strong>
+                  <span>Saved to device gallery storage</span>
+                </div>
+
+                <div class="info-card compact">
+                  <div class="card-label">Controls</div>
+                  <div class="mini-row">
+                    <span class="mini-chip accent">FPS</span>
+                    <span class="mini-chip">RGB</span>
+                    <span class="mini-chip">AI</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="visual-footer">
+              <div>
+                <span class="muted">Supported sensors</span>
+                <strong>2 models in the current build</strong>
+              </div>
+              <div class="metric">
+                <span class="muted">Local-only</span>
+                <strong>100% on device</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="stats-strip" aria-label="Quick facts">
+        <div class="stat-card">
+          <span class="stat-value">2</span>
+          <span class="stat-label">supported sensor models</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-value">60 FPS</span>
+          <span class="stat-label">DIGIT native rate</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-value">25 FPS</span>
+          <span class="stat-label">GelSight Mini native rate</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-value">API 24+</span>
+          <span class="stat-label">Android requirement</span>
+        </div>
+      </section>
+
+      <section class="content-grid">
+        <article class="panel overview-panel">
+          <div class="section-head">
+            <span class="section-kicker">Overview</span>
+            <h2>Built for a focused hardware workflow.</h2>
+          </div>
+          <div class="card-grid stacked">
+            <div class="feature-card">
+              <span class="feature-icon">01</span>
+              <h3>Connect</h3>
+              <p>The app waits for a supported USB sensor and prompts for permission when one appears.</p>
+            </div>
+            <div class="feature-card">
+              <span class="feature-icon">02</span>
+              <h3>Preview</h3>
+              <p>Once recognized, the camera opens with a live preview shaped for the sensor.</p>
+            </div>
+            <div class="feature-card">
+              <span class="feature-icon">03</span>
+              <h3>Capture</h3>
+              <p>Take photos, record videos, and save media to gallery storage.</p>
+            </div>
+          </div>
+        </article>
+
+        <aside class="panel sidebar-panel">
+          <div class="section-head compact">
+            <span class="section-kicker">Good to know</span>
+            <h2>What makes it useful</h2>
+          </div>
+          <ul class="check-list">
+            <li>Fully local operation with no backend or cloud dependency.</li>
+            <li>Supported sensor detection with a clear connect/cancel prompt.</li>
+            <li>Gallery handoff that can open installed apps like Google Photos or Samsung Gallery.</li>
+          </ul>
+          <details class="more-info">
+            <summary>More about the capture flow</summary>
+            <p>
+              Photos and videos are saved from the camera flow directly on the device, so users can open them
+              immediately in a gallery app without needing a server.
+            </p>
+          </details>
+        </aside>
+      </section>
+
+      <section id="features" class="panel">
+        <div class="section-head">
+          <span class="section-kicker">Features</span>
+          <h2>Everything the current app already supports.</h2>
+        </div>
+        <div class="card-grid stacked feature-suite">
+          <div class="feature-card soft">
+            <h3>Live sensor preview</h3>
+            <p>Shows the camera feed after permission is granted and the device is recognized.</p>
+          </div>
+          <div class="feature-card soft">
+            <h3>Photo capture</h3>
+            <p>Captures still images and saves them to the device gallery.</p>
+          </div>
+          <div class="feature-card soft">
+            <h3>Video recording</h3>
+            <p>Records video clips and stores them alongside the photos on the device.</p>
+          </div>
+          <div class="feature-card soft">
+            <h3>RGB illumination controls</h3>
+            <p>Tune red, green, and blue illumination to suit the sensor workflow.</p>
+          </div>
+          <div class="feature-card soft">
+            <h3>FPS control</h3>
+            <p>Adjust the preview frame rate, with device-specific max values surfaced in the UI.</p>
+          </div>
+          <div class="feature-card soft">
+            <h3>Gallery shortcut</h3>
+            <p>Opens installed gallery apps so users can review the captured media immediately.</p>
+          </div>
+        </div>
+        <details class="more-info inset">
+          <summary>Show technical notes</summary>
+          <p>
+            The app also surfaces FPS and resolution information, supports sensor-specific preview shapes, and keeps
+            the AI selector as a placeholder for future on-device features.
+          </p>
+        </details>
+      </section>
+
+      <section id="workflow" class="panel">
+        <div class="section-head">
+          <span class="section-kicker">Workflow</span>
+          <h2>How a new user gets from install to capture.</h2>
+        </div>
+        <div class="timeline">
+          <div class="timeline-item">
+            <span class="timeline-step">1</span>
+            <div>
+              <h3>Install the APK</h3>
+              <p>Download the latest build from GitHub Releases and install it on a compatible Android device.</p>
+            </div>
+          </div>
+          <div class="timeline-item">
+            <span class="timeline-step">2</span>
+            <div>
+              <h3>Attach a supported sensor</h3>
+              <p>Plug in a DIGIT or GelSight Mini sensor through USB host mode.</p>
+            </div>
+          </div>
+          <div class="timeline-item">
+            <span class="timeline-step">3</span>
+            <div>
+              <h3>Grant access</h3>
+              <p>Android asks for camera and USB permission, then the app verifies the connected hardware.</p>
+            </div>
+          </div>
+          <div class="timeline-item">
+            <span class="timeline-step">4</span>
+            <div>
+              <h3>Capture or record</h3>
+              <p>Use the capture button, open the gallery, or adjust FPS and RGB settings as needed.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="hardware" class="panel">
+        <div class="section-head">
+          <span class="section-kicker">Supported hardware</span>
+          <h2>Current recognized sensor models.</h2>
+        </div>
+        <div class="hardware-grid stacked">
+          <article class="hardware-card">
+            <div class="hardware-head">
+              <div>
+                <h3>Open Touch Sensor (DIGIT)</h3>
+                <p>Vendor ID 0x2833, Product ID 0x0209</p>
+              </div>
+              <span class="pill accent">Known</span>
+            </div>
+            <dl class="spec-list">
+              <div><dt>Native resolution</dt><dd>320 x 240</dd></div>
+              <div><dt>Max FPS</dt><dd>60</dd></div>
+              <div><dt>Folder name</dt><dd>Digit</dd></div>
+            </dl>
+          </article>
+
+          <article class="hardware-card">
+            <div class="hardware-head">
+              <div>
+                <h3>GelSight Mini</h3>
+                <p>Vendor ID 0x0C45, Product ID 0x636D</p>
+              </div>
+              <span class="pill teal">Known</span>
+            </div>
+            <dl class="spec-list">
+              <div><dt>Native resolution</dt><dd>320 x 240</dd></div>
+              <div><dt>Max FPS</dt><dd>25</dd></div>
+              <div><dt>Folder name</dt><dd>GelSightMini</dd></div>
+            </dl>
+          </article>
+        </div>
+        <details class="more-info inset">
+          <summary>How recognition works</summary>
+          <p>
+            The app checks USB vendor ID, product ID, and product name to classify a device as known, probable, or
+            unknown before it opens the preview.
+          </p>
+        </details>
+      </section>
+
+      <section id="download" class="panel">
+        <div class="section-head">
+          <span class="section-kicker">Download and requirements</span>
+          <h2>Where to get it and what the device needs.</h2>
+        </div>
+        <div class="download-grid stacked">
+          <div class="download-card">
+            <h3>Get the app</h3>
+            <p>The repo publishes a stable latest APK asset on GitHub Releases.</p>
+            <div class="button-row">
+              <a class="button button-primary" href="https://github.com/lasr-lab/opentouchapp/releases/latest/download/OpenTouch-latest.apk">Download APK</a>
+              <a class="button button-secondary" href="https://github.com/lasr-lab/opentouchapp" target="_blank" rel="noreferrer">View repo</a>
+            </div>
+          </div>
+          <div class="download-card muted-card">
+            <h3>Requirements</h3>
+            <ul class="check-list compact">
+              <li>Android 7.0 or newer, API 24+.</li>
+              <li>USB host support on the device.</li>
+              <li>Camera permission during runtime.</li>
+              <li>No backend server, database, or web API needed for normal use.</li>
+            </ul>
+          </div>
+        </div>
+        <details class="more-info inset">
+          <summary>What to expect on first launch</summary>
+          <p>
+            You’ll briefly see the splash screen, then the app opens the main workspace and asks for camera access if
+            it is not already granted.
+          </p>
+        </details>
+      </section>
+
+      <section id="faq" class="panel">
+        <div class="section-head">
+          <span class="section-kicker">FAQ</span>
+          <h2>Short answers for first-time visitors.</h2>
+        </div>
+
+        <div class="faq-list">
+          <details>
+            <summary>What devices does Open Touch support?</summary>
+            <p>Right now the app recognizes DIGIT and GelSight Mini sensors from the codebase.</p>
+          </details>
+          <details>
+            <summary>Does it need an internet connection?</summary>
+            <p>No. The app is designed to work locally on the Android device once the sensor is connected.</p>
+          </details>
+          <details>
+            <summary>Where are photos and videos saved?</summary>
+            <p>Captured media is saved to the device gallery storage so users can review it with installed gallery apps.</p>
+          </details>
+          <details>
+            <summary>Why does it ask for camera and USB permission?</summary>
+            <p>Those permissions are needed so Android can allow access to the sensor camera and the connected USB hardware.</p>
+          </details>
+          <details>
+            <summary>Is there a Play Store listing?</summary>
+            <p>The repository currently exposes a GitHub release APK download; no Play Store URL is present in the project files.</p>
+          </details>
+        </div>
+      </section>
+    </main>
+
+  <footer class="footer">
+      <div>
+        <strong>Open Touch</strong>
+        <span>Version 1.1.3</span>
+      </div>
+      <div class="footer-links">
+        <a href="https://github.com/lasr-lab/opentouchapp" target="_blank" rel="noreferrer">GitHub</a>
+        <a href="https://github.com/lasr-lab/opentouchapp/blob/main/docs/PROJECT_DOCUMENTATION.md" target="_blank" rel="noreferrer">Docs</a>
+        <a href="https://github.com/lasr-lab/opentouchapp/releases/latest/download/OpenTouch-latest.apk">APK</a>
+      </div>
+    </footer>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>
