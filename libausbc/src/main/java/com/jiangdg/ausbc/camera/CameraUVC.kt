@@ -80,25 +80,65 @@ class CameraUVC(ctx: Context, device: UsbDevice) : MultiCameraClient.ICamera(ctx
         }
     }
 
+    /**
+     * Which UVC frame format ([UVCCamera.FRAME_FORMAT_YUYV] or
+     * [UVCCamera.FRAME_FORMAT_MJPEG]) the last call to [getAllPreviewSizes]
+     * actually found sizes for.
+     *
+     * This can differ from the app's requested [CameraRequest.previewFormat]
+     * when the connected device doesn't expose any sizes in that format -
+     * see the fallback below. [openCameraInternal] uses this value to pick
+     * the format it actually asks the device to preview in, instead of
+     * blindly requesting whatever format the app asked for and finding out
+     * only after a failed native call that the device doesn't support it
+     * (that failure/retry path is what previously caused a native crash -
+     * see the FORMAT_YUYV comment in
+     * CameraPreviewFragment.getCameraRequest()).
+     */
+    private var mResolvedFrameFormat: Int? = null
+
     override fun getAllPreviewSizes(aspectRatio: Double?): MutableList<PreviewSize> {
         val previewSizeList = arrayListOf<PreviewSize>()
 
-        val isMjpegFormat = mCameraRequest?.previewFormat == CameraRequest.PreviewFormat.FORMAT_MJPEG
-        if (isMjpegFormat && (mUvcCamera?.supportedSizeList?.isNotEmpty() == true)) {
-            mUvcCamera?.supportedSizeList
-        }  else {
-            mUvcCamera?.getSupportedSizeList(UVCCamera.FRAME_FORMAT_YUYV)
-        }?.let { sizeList ->
-            if (sizeList.size > mCameraPreviewSize.size) {
+        val requestedFrameFormat = if (mCameraRequest?.previewFormat == CameraRequest.PreviewFormat.FORMAT_MJPEG) {
+            UVCCamera.FRAME_FORMAT_MJPEG
+        } else {
+            UVCCamera.FRAME_FORMAT_YUYV
+        }
+        var sizeList = mUvcCamera?.getSupportedSizeList(requestedFrameFormat)
+        var resolvedFrameFormat = requestedFrameFormat
+        // Some UVC sensors (confirmed on a GelSight Mini unit via real-device
+        // logs) only expose ONE of the two formats. If the app's requested
+        // format isn't one the device offers, fall back to whichever format
+        // the device DOES report sizes for, instead of returning an empty
+        // list. An empty list here is what previously made getSuitableSize()
+        // default to a hardcoded 320x240 that no device actually offers,
+        // producing "preview size unsupported" and an immediate disconnect.
+        if (sizeList.isNullOrEmpty()) {
+            val fallbackFrameFormat = if (requestedFrameFormat == UVCCamera.FRAME_FORMAT_MJPEG) {
+                UVCCamera.FRAME_FORMAT_YUYV
+            } else {
+                UVCCamera.FRAME_FORMAT_MJPEG
+            }
+            val fallbackSizeList = mUvcCamera?.getSupportedSizeList(fallbackFrameFormat)
+            if (!fallbackSizeList.isNullOrEmpty()) {
+                sizeList = fallbackSizeList
+                resolvedFrameFormat = fallbackFrameFormat
+            }
+        }
+        mResolvedFrameFormat = resolvedFrameFormat
+
+        sizeList?.let { list ->
+            if (list.size > mCameraPreviewSize.size) {
                 mCameraPreviewSize.clear()
-                sizeList.forEach { size->
+                list.forEach { size->
                     val width = size.width
                     val height = size.height
                     mCameraPreviewSize.add(PreviewSize(width, height))
                 }
             }
             if (Utils.debugCamera) {
-                Logger.i(TAG, "aspect ratio = $aspectRatio, supportedSizeList = $sizeList")
+                Logger.i(TAG, "aspect ratio = $aspectRatio, resolvedFrameFormat = $resolvedFrameFormat, supportedSizeList = $list")
             }
             mCameraPreviewSize
         }?.onEach { size ->
@@ -141,11 +181,15 @@ class CameraUVC(ctx: Context, device: UsbDevice) : MultiCameraClient.ICamera(ctx
             mCameraRequest!!.previewWidth = width
             mCameraRequest!!.previewHeight = height
         }
-        val previewFormat = if (mCameraRequest?.previewFormat == CameraRequest.PreviewFormat.FORMAT_YUYV) {
+        val requestedPreviewFormat = if (mCameraRequest?.previewFormat == CameraRequest.PreviewFormat.FORMAT_YUYV) {
             UVCCamera.FRAME_FORMAT_YUYV
         } else {
             UVCCamera.FRAME_FORMAT_MJPEG
         }
+        // Request whichever format getAllPreviewSizes() (called above via
+        // getSuitableSize()) actually found sizes for on this device, not
+        // just what the app asked for - see mResolvedFrameFormat.
+        val previewFormat = mResolvedFrameFormat ?: requestedPreviewFormat
         try {
             Logger.i(TAG, "getSuitableSize: $previewSize")
             if (! isPreviewSizeSupported(previewSize)) {
@@ -237,6 +281,9 @@ class CameraUVC(ctx: Context, device: UsbDevice) : MultiCameraClient.ICamera(ctx
         releaseEncodeProcessor()
         mUvcCamera?.destroy()
         mUvcCamera = null
+        // Force a fresh format resolution on the next open - don't carry a
+        // resolved format over to a different device/reconnect.
+        mResolvedFrameFormat = null
         if (Utils.debugCamera) {
             val safeName = try {
                 device.serialNumber
