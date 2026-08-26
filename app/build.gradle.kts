@@ -78,6 +78,12 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation(project(":libausbc"))
     implementation("androidx.exifinterface:exifinterface:1.3.7")
+    // Lets MainActivity call installSplashScreen() and take explicit control
+    // of the system's mandatory cold-start icon screen (dismiss it the instant
+    // the app's first frame is ready), instead of relying on whatever timing
+    // Android's fully automatic Android 12+ splash behavior happens to use -
+    // see MainActivity.kt and themes.xml (Theme.Digitapp.Starting).
+    implementation("androidx.core:core-splashscreen:1.0.1")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

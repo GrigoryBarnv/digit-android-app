@@ -687,6 +687,38 @@ class CameraPreviewFragment : CameraFragment() {
         }
     }
 
+    /**
+     * Changes both the requested fps and resolution together, as a single
+     * close/reopen. [changePreviewFps] and [changePreviewResolution] each
+     * independently check isCameraOpened() and call closeCamera() - calling
+     * them back-to-back (as the FPS panel's Apply button used to) is racy:
+     * the fps change's closeCamera() can kick off the auto-reconnect flow
+     * and have it call getCameraRequest() again before the very next line
+     * sets the new target resolution, so the reopen silently uses the OLD
+     * resolution with the NEW fps. On DIGIT that combination can be a
+     * genuinely invalid one per the sensor's spec (e.g. 320x240 has no
+     * 15fps mode - only 640x480 does), so the open fails outright and shows
+     * "Camera disconnected" even though 640x480@15fps itself is fine.
+     *
+     * Setting both target values first and closing exactly once removes the
+     * race entirely - the reopen (whenever it happens) always sees a
+     * consistent, already-valid fps+resolution pair.
+     */
+    fun changePreviewFpsAndResolution(fps: Int, width: Int, height: Int) {
+        _targetFps.value = fps
+        _targetResolution.value = width to height
+        if (fps <= 0) {
+            pausedForZeroFps = true
+            if (isCameraOpened()) closeCamera()
+            return
+        }
+        pausedForZeroFps = false
+        setFps(fps)
+        if (isCameraOpened()) {
+            closeCamera()
+        }
+    }
+
     // ─── Resolution + supported-size helpers (Settings) ───────────────────────
 
     /**
@@ -1216,6 +1248,10 @@ class CameraPreviewFragment : CameraFragment() {
             // real request" (worth surfacing) apart from "nothing has been
             // plugged in this whole time" (the normal waiting state).
             var everSawDevice = false
+            // Counts consecutive polls (500ms apart) where no recognized
+            // device was found. See its use below: a SINGLE miss is treated
+            // as a momentary USB re-enumeration gap, not a real unplug.
+            var consecutiveMisses = 0
             // "Access denied. Want to reconnect?" and "No response. Want to
             // reconnect?" are now resolved with real evidence, not a guess:
             // once onResume() confirms a pending request's dialog has
@@ -1285,6 +1321,7 @@ class CameraPreviewFragment : CameraFragment() {
                 }
                 if (firstDevice != null) {
                     everSawDevice = true
+                    consecutiveMisses = 0
                     // The sensor's FTDI FT900 chip briefly shows up as its own
                     // bootloader ("FT900 DFU Mode") for a second or two while it
                     // boots, before re-enumerating as the real "DIGIT" sensor.
@@ -1355,6 +1392,31 @@ class CameraPreviewFragment : CameraFragment() {
                         // the answer entirely.
                     }
                 } else {
+                    consecutiveMisses++
+                    if (consecutiveMisses < 2) {
+                        // Closing the camera to apply a new FPS/resolution
+                        // (see changePreviewFps/changePreviewFpsAndResolution)
+                        // can make the still-attached sensor briefly vanish
+                        // from getDeviceList() during USB re-enumeration -
+                        // the "[USBMonitor] get permission failed in
+                        // mUsbReceiver" / processCancel hiccup seen in
+                        // Logcat right before the camera silently reopens on
+                        // its own. Treating that single missed poll as a
+                        // genuine unplug used to wipe lastDetectedDeviceKey
+                        // here, which then made onCameraState(OPENED) think
+                        // a "new" sensor had just connected and reset the
+                        // user's just-chosen _targetFps/_targetResolution
+                        // back to null right as the camera reopened - so an
+                        // Apply of e.g. 640x480@15fps silently reopened at
+                        // the old/default 320x240 instead, which isn't a
+                        // valid combo at 15fps and failed with "Camera
+                        // disconnected". Waiting for a second consecutive
+                        // miss (~1s of continuous absence) before declaring
+                        // an unplug rides out that gap while still reacting
+                        // quickly to a real unplug.
+                        delay(500)
+                        return@repeat
+                    }
                     // No device connected (genuine unplug) — reset so the next
                     // physical connection shows the popup again, and clear the
                     // popup state so it can't show with nothing attached.
@@ -1577,6 +1639,16 @@ class CameraPreviewFragment : CameraFragment() {
         /** Requests a new preview resolution. See [changePreviewResolution]. */
         fun requestSetResolution(width: Int, height: Int) {
             activeInstance?.changePreviewResolution(width, height)
+        }
+
+        /**
+         * Requests a new fps + resolution together as a single close/reopen.
+         * Prefer this over calling [requestSetFps] and [requestSetResolution]
+         * back-to-back - see [changePreviewFpsAndResolution] for why that's
+         * racy.
+         */
+        fun requestSetFpsAndResolution(fps: Int, width: Int, height: Int) {
+            activeInstance?.changePreviewFpsAndResolution(fps, width, height)
         }
 
         /** Sizes the connected sensor supports. Empty if no camera is open. */

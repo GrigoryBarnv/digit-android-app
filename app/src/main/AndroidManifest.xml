@@ -48,14 +48,9 @@
 
         <activity
             android:name=".presentation.activity.MainActivity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize" />
-
-        <activity
-            android:name=".presentation.activity.SplashActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"
-            android:theme="@style/Theme.Digitapp">
+            android:theme="@style/Theme.Digitapp.Starting">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
