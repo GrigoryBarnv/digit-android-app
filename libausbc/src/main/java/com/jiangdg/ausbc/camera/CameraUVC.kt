@@ -177,7 +177,33 @@ class CameraUVC(ctx: Context, device: UsbDevice) : MultiCameraClient.ICamera(ctx
         }
 
         // 2. set preview size and register preview callback
-        var previewSize = getSuitableSize(request.previewWidth, request.previewHeight).apply {
+        // request.previewWidth/previewHeight may be swapped from the
+        // sensor's native (landscape) orientation - CameraPreviewFragment.
+        // getCameraRequest() intentionally swaps them for 90/270 degree
+        // rotations so the on-screen preview BOX is portrait-shaped (that's
+        // read via setAspectRatio() in MultiCameraClient before this
+        // function ever runs - see MSG_START_PREVIEW). But no UVC sensor
+        // actually exposes a "portrait" streaming mode, only landscape
+        // sizes. Feeding the swapped size straight into getSuitableSize()
+        // below means neither its exact-match nor its aspect-ratio-match
+        // step ever succeeds (a 3:4 request never equals this sensor's 4:3
+        // modes), so it silently falls through to getSuitableSize()'s own
+        // hardcoded "use default" fallback (DEFAULT_PREVIEW_WIDTH/HEIGHT =
+        // 320x240 in MultiCameraClient) - ALWAYS 320x240, no matter which
+        // resolution was actually selected. That's harmless at whatever fps
+        // 320x240 already supports, but silently overrides a user's
+        // 640x480 pick - and if they chose an fps that 320x240 doesn't
+        // support (DIGIT's 15fps mode only exists at 640x480), the native
+        // setPreviewSize() negotiation then fails outright, showing
+        // "Camera disconnected" even though the fps/resolution combo they
+        // picked is perfectly valid at 640x480. Try the swapped orientation
+        // as an exact match FIRST, so a portrait-UI request for what is
+        // really a landscape-native size still finds it directly instead of
+        // falling through to that default.
+        val allSizes = getAllPreviewSizes(null)
+        val exactOrSwapped = allSizes.find { it.width == request.previewWidth && it.height == request.previewHeight }
+            ?: allSizes.find { it.width == request.previewHeight && it.height == request.previewWidth }
+        var previewSize = (exactOrSwapped ?: getSuitableSize(request.previewWidth, request.previewHeight)).apply {
             mCameraRequest!!.previewWidth = width
             mCameraRequest!!.previewHeight = height
         }
@@ -211,7 +237,10 @@ class CameraUVC(ctx: Context, device: UsbDevice) : MultiCameraClient.ICamera(ctx
             )
         } catch (e: Exception) {
             try {
-                previewSize = getSuitableSize(request.previewWidth, request.previewHeight).apply {
+                // Same swapped-orientation exact-match fix as above - the
+                // retry must not fall back to the plain getSuitableSize()
+                // call, or it lands right back on the buggy 320x240 default.
+                previewSize = (exactOrSwapped ?: getSuitableSize(request.previewWidth, request.previewHeight)).apply {
                     mCameraRequest!!.previewWidth = width
                     mCameraRequest!!.previewHeight = height
                 }

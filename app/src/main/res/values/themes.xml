@@ -1,4 +1,28 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.Digitapp" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <!-- Used only by MainActivity, the app's launcher activity (see
+         AndroidManifest.xml), and only for the brief window before
+         installSplashScreen()'s exit condition is met - see
+         MainActivity.onCreate(). On Android 12+ this maps onto the
+         platform's own mandatory cold-start "starting window", which can't
+         be skipped outright on any Android version - only styled.
+
+         windowSplashScreenAnimatedIcon MUST stay a plain, roughly-square
+         image - a previous attempt at baking "OpenTouch" text into a taller
+         custom image got center-cropped by the system instead of shrunk to
+         fit. It points at the original ic_launcher_foreground (purple/white,
+         unmodified) rather than a transparent variant - an earlier attempt
+         at stripping the white background to transparent also stripped
+         white that's part of the logo artwork itself, changing how it
+         looked. SplashScreen.kt (MainActivity's own logo+"OpenTouch" screen,
+         shown right after this one) uses that exact same asset with no
+         extra circle/shadow decoration around it either, so the logo looks
+         identical in both places instead of like two different images. -->
+    <style name="Theme.Digitapp.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">#0E0E0E</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.Digitapp</item>
+    </style>
 </resources>
