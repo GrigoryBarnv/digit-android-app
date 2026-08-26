@@ -687,6 +687,38 @@ class CameraPreviewFragment : CameraFragment() {
         }
     }
 
+    /**
+     * Changes both the requested fps and resolution together, as a single
+     * close/reopen. [changePreviewFps] and [changePreviewResolution] each
+     * independently check isCameraOpened() and call closeCamera() - calling
+     * them back-to-back (as the FPS panel's Apply button used to) is racy:
+     * the fps change's closeCamera() can kick off the auto-reconnect flow
+     * and have it call getCameraRequest() again before the very next line
+     * sets the new target resolution, so the reopen silently uses the OLD
+     * resolution with the NEW fps. On DIGIT that combination can be a
+     * genuinely invalid one per the sensor's spec (e.g. 320x240 has no
+     * 15fps mode - only 640x480 does), so the open fails outright and shows
+     * "Camera disconnected" even though 640x480@15fps itself is fine.
+     *
+     * Setting both target values first and closing exactly once removes the
+     * race entirely - the reopen (whenever it happens) always sees a
+     * consistent, already-valid fps+resolution pair.
+     */
+    fun changePreviewFpsAndResolution(fps: Int, width: Int, height: Int) {
+        _targetFps.value = fps
+        _targetResolution.value = width to height
+        if (fps <= 0) {
+            pausedForZeroFps = true
+            if (isCameraOpened()) closeCamera()
+            return
+        }
+        pausedForZeroFps = false
+        setFps(fps)
+        if (isCameraOpened()) {
+            closeCamera()
+        }
+    }
+
     // ─── Resolution + supported-size helpers (Settings) ───────────────────────
 
     /**
@@ -1577,6 +1609,16 @@ class CameraPreviewFragment : CameraFragment() {
         /** Requests a new preview resolution. See [changePreviewResolution]. */
         fun requestSetResolution(width: Int, height: Int) {
             activeInstance?.changePreviewResolution(width, height)
+        }
+
+        /**
+         * Requests a new fps + resolution together as a single close/reopen.
+         * Prefer this over calling [requestSetFps] and [requestSetResolution]
+         * back-to-back - see [changePreviewFpsAndResolution] for why that's
+         * racy.
+         */
+        fun requestSetFpsAndResolution(fps: Int, width: Int, height: Int) {
+            activeInstance?.changePreviewFpsAndResolution(fps, width, height)
         }
 
         /** Sizes the connected sensor supports. Empty if no camera is open. */

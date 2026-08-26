@@ -1122,10 +1122,13 @@ fun DemoScreen() {
 
                     Button(
                         onClick = {
-                            CameraPreviewFragment.requestSetFps(snappedFps)
+                            // Set fps and resolution together (single close/
+                            // reopen) rather than two separate calls - see
+                            // CameraPreviewFragment.changePreviewFpsAndResolution
+                            // for why calling them back-to-back is racy.
                             effectiveResolution?.let { (w, h) ->
-                                CameraPreviewFragment.requestSetResolution(w, h)
-                            }
+                                CameraPreviewFragment.requestSetFpsAndResolution(snappedFps, w, h)
+                            } ?: CameraPreviewFragment.requestSetFps(snappedFps)
                             showFpsControls = false
                         },
                         modifier = Modifier.fillMaxWidth(),
