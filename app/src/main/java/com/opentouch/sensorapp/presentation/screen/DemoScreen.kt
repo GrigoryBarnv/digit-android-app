@@ -41,7 +41,6 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LinkOff
@@ -87,6 +86,7 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -100,6 +100,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.fragment.app.FragmentActivity
 import androidx.fragment.app.FragmentContainerView
 import androidx.fragment.app.commit
+import com.opentouch.sensorapp.R
 import com.opentouch.sensorapp.data.ResolutionFpsOption
 import com.opentouch.sensorapp.data.SupportedSensors
 import com.opentouch.sensorapp.presentation.component.RgbControls
@@ -1158,21 +1159,23 @@ fun DemoScreen() {
                             .padding(horizontal = 24.dp, vertical = 28.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        // App "logo" - a simple touch-themed icon in a lilac
-                        // circle, matching the app's accent color used
-                        // elsewhere (nav buttons, selected states).
+                        // App logo (the actual launcher artwork, not just a
+                        // generic icon) - it's a plain RGB PNG with a white
+                        // backing (no alpha), so it's shown on a white circle
+                        // rather than tinted lilac, which would otherwise
+                        // leave an odd white square poking out from behind it.
                         Box(
                             modifier = Modifier
-                                .size(64.dp)
+                                .size(72.dp)
                                 .shadow(8.dp, CircleShape)
-                                .background(lilac, CircleShape),
+                                .clip(CircleShape)
+                                .background(Color.White),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                Icons.Filled.Fingerprint,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(34.dp)
+                            Image(
+                                painter = painterResource(id = R.drawable.ic_launcher_foreground),
+                                contentDescription = "OpenTouch logo",
+                                modifier = Modifier.fillMaxSize()
                             )
                         }
 
