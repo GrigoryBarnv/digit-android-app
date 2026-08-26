@@ -121,6 +121,30 @@ object SupportedSensors {
                 ResolutionFpsOption(320, 240, 25),
             ),
         ),
+        SupportedSensor(
+            displayName = "DIGIT 360",
+            shortName = "DIGIT 360",
+            // TODO: placeholder values - not yet verified against real hardware.
+            // DIGIT 360 (Meta/GelSight's newer multimodal sensor) doesn't have a
+            // published VID/PID or a simple native resolution/fps like DIGIT and
+            // GelSight Mini do - it's a multimodal USB-C 3.1 device (18+ sensing
+            // channels, ~8.3M taxels) normally accessed via Meta's own
+            // python/ROS2 interface (github.com/facebookresearch/digit360), so it
+            // may not even present as a single plain UVC camera the way the
+            // other two sensors do. vendorId/productId are left at 0x0000 (not a
+            // real, assignable USB-IF vendor ID) so this entry can't accidentally
+            // match a real connected device until it's actually plugged in and
+            // read from Logcat/USB descriptor - update once a unit or datasheet
+            // is available.
+            vendorId = 0x0000,
+            productIds = setOf(0x0000),
+            nameFragment = "digit360",
+            maxFps = 30,           // TODO: unverified guess
+            nativeWidth = 320,     // TODO: unverified guess
+            nativeHeight = 240,    // TODO: unverified guess
+            folderName = "Digit360",
+            resolutionFpsOptions = emptyList(),
+        ),
     )
 
     /** Confident match: vendor + a known product ID. */

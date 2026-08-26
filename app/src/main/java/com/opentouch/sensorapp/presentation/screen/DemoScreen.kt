@@ -14,6 +14,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -40,6 +41,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Memory
@@ -56,9 +58,11 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -82,6 +86,7 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -91,9 +96,11 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
 import androidx.fragment.app.FragmentActivity
 import androidx.fragment.app.FragmentContainerView
 import androidx.fragment.app.commit
+import com.opentouch.sensorapp.R
 import com.opentouch.sensorapp.data.ResolutionFpsOption
 import com.opentouch.sensorapp.data.SupportedSensors
 import com.opentouch.sensorapp.presentation.component.RgbControls
@@ -312,6 +319,16 @@ fun DemoScreen() {
 
     // ── Settings menu (FPS / RGB / Resolution) ────────────────────────────────
     var showSettingsMenu by remember { mutableStateOf(false) }
+
+    // ── Credits dialog — app version + who built it (professor's request) ─────
+    var showCreditsDialog by remember { mutableStateOf(false) }
+    val appVersionName = remember {
+        try {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        } catch (e: Exception) {
+            null
+        }
+    }
     // Live-measured FPS coming from the camera fragment (read-only display).
     val currentFps = CameraPreviewFragment.currentFps.value
 
@@ -426,7 +443,7 @@ fun DemoScreen() {
             .padding(12.dp)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // ── Top bar: centered "Open Touch" title only ──────────────────────
+            // ── Top bar: centered "OpenTouch" title, Credits button top-right ──
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -439,6 +456,16 @@ fun DemoScreen() {
                     fontSize = 18.sp,
                     fontWeight = FontWeight.SemiBold
                 )
+                IconButton(
+                    onClick = { showCreditsDialog = true },
+                    modifier = Modifier.align(Alignment.CenterEnd)
+                ) {
+                    Icon(
+                        Icons.Filled.Group,
+                        contentDescription = "Credits",
+                        tint = Color.White
+                    )
+                }
             }
 
             // Shape the preview to match whichever sensor is actually connected:
@@ -730,18 +757,24 @@ fun DemoScreen() {
                             }
                         )
 
-                        HorizontalDivider()
+                        // GelSight Mini has no controllable RGB illumination
+                        // (unlike DIGIT), so the option is hidden entirely
+                        // rather than shown disabled - there's nothing for it
+                        // to ever do on this sensor.
+                        if (matchedSensor?.folderName != "GelSightMini") {
+                            HorizontalDivider()
 
-                        // ── RGB — opens the existing slider overlay panel. ─────
-                        DropdownMenuItem(
-                            text = { Text("RGB controls", color = Color.White) },
-                            leadingIcon = { Icon(Icons.Filled.Palette, contentDescription = null, tint = Color.White) },
-                            onClick = {
-                                showSettingsMenu = false
-                                showFpsControls = false
-                                showRgbControls = true
-                            }
-                        )
+                            // ── RGB — opens the existing slider overlay panel. ──
+                            DropdownMenuItem(
+                                text = { Text("RGB controls", color = Color.White) },
+                                leadingIcon = { Icon(Icons.Filled.Palette, contentDescription = null, tint = Color.White) },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    showFpsControls = false
+                                    showRgbControls = true
+                                }
+                            )
+                        }
 
                         HorizontalDivider()
 
@@ -909,7 +942,10 @@ fun DemoScreen() {
             }
         }
 
-        if (showRgbControls) {
+        // Also guard the panel itself, not just the menu entry that opens it -
+        // covers the case where RGB controls were already open and the user
+        // then hot-swaps to a GelSight Mini without closing the panel first.
+        if (showRgbControls && matchedSensor?.folderName != "GelSightMini") {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -1114,6 +1150,110 @@ fun DemoScreen() {
                     HorizontalDivider(color = Color(0xFF3D3D3D))
                 }
                 Spacer(modifier = Modifier.navigationBarsPadding())
+            }
+        }
+
+        // ── Credits dialog — app version + who built it ────────────────────
+        if (showCreditsDialog) {
+            val lilac = Color(0xFF594BA0)
+            Dialog(onDismissRequest = { showCreditsDialog = false }) {
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = Color(0xFF2C2D33),
+                    border = BorderStroke(1.dp, Color(0xFF3D3D3D)),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 28.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        // App logo (the actual launcher artwork, not just a
+                        // generic icon) - it's a plain RGB PNG with a white
+                        // backing (no alpha), so it's shown on a white circle
+                        // rather than tinted lilac, which would otherwise
+                        // leave an odd white square poking out from behind it.
+                        Box(
+                            modifier = Modifier
+                                .size(72.dp)
+                                .shadow(8.dp, CircleShape)
+                                .clip(CircleShape)
+                                .background(Color.White),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Image(
+                                painter = painterResource(id = R.drawable.ic_launcher_foreground),
+                                contentDescription = "OpenTouch logo",
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Text("OpenTouch", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Box(
+                            modifier = Modifier
+                                .background(Color(0xFF1E1E1E), RoundedCornerShape(20.dp))
+                                .padding(horizontal = 12.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                if (appVersionName != null) "Version $appVersionName" else "Version —",
+                                color = Color(0xFF9A9A9A),
+                                fontSize = 12.sp
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(22.dp))
+                        HorizontalDivider(color = Color(0xFF3D3D3D))
+                        Spacer(modifier = Modifier.height(18.dp))
+
+                        Text(
+                            "DEVELOPED BY",
+                            color = Color(0xFF9A9A9A),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 4.dp)
+                        )
+
+                        listOf("Nasima Mallick", "Grigory Baranov", "Gayathri Kakarla").forEach { name ->
+                            val initials = name.split(" ")
+                                .mapNotNull { it.firstOrNull()?.toString() }
+                                .joinToString("")
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .background(lilac.copy(alpha = 0.85f), CircleShape),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        initials,
+                                        color = Color.White,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                                Text(name, color = Color.White, fontSize = 15.sp)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(22.dp))
+
+                        Button(
+                            onClick = { showCreditsDialog = false },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = lilac, contentColor = Color.White)
+                        ) { Text("Close") }
+                    }
+                }
             }
         }
     }
