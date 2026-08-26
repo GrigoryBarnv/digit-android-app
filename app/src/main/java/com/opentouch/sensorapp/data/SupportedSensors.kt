@@ -70,6 +70,22 @@ data class SupportedSensor(
         val matches = resolutionFpsOptions.filter { it.fps == fps }
         return matches.ifEmpty { listOf(ResolutionFpsOption(nativeWidth, nativeHeight, fps)) }
     }
+
+    /**
+     * The distinct fps values this sensor actually has verified combos for,
+     * sorted ascending (e.g. DIGIT: [15, 30, 60], from its VGA/QVGA specs) -
+     * these are the only positions the FPS slider should ever land on, so
+     * dragging it can't produce a value like "0 fps" that isn't real and
+     * doesn't match any resolution. Falls back to a generic 0/half/max
+     * spread when nothing's been verified yet (e.g. GelSight Mini's single
+     * datasheet combo, or a brand new placeholder sensor), so every sensor
+     * still gets a usable stepped slider.
+     */
+    val fpsStops: List<Int>
+        get() {
+            val verified = resolutionFpsOptions.map { it.fps }.distinct().sorted()
+            return verified.ifEmpty { listOf(0, maxFps / 2, maxFps).distinct() }
+        }
 }
 
 enum class SensorMatchType { KNOWN, PROBABLE, UNKNOWN }
