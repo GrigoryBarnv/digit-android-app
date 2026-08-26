@@ -757,18 +757,24 @@ fun DemoScreen() {
                             }
                         )
 
-                        HorizontalDivider()
+                        // GelSight Mini has no controllable RGB illumination
+                        // (unlike DIGIT), so the option is hidden entirely
+                        // rather than shown disabled - there's nothing for it
+                        // to ever do on this sensor.
+                        if (matchedSensor?.folderName != "GelSightMini") {
+                            HorizontalDivider()
 
-                        // ── RGB — opens the existing slider overlay panel. ─────
-                        DropdownMenuItem(
-                            text = { Text("RGB controls", color = Color.White) },
-                            leadingIcon = { Icon(Icons.Filled.Palette, contentDescription = null, tint = Color.White) },
-                            onClick = {
-                                showSettingsMenu = false
-                                showFpsControls = false
-                                showRgbControls = true
-                            }
-                        )
+                            // ── RGB — opens the existing slider overlay panel. ──
+                            DropdownMenuItem(
+                                text = { Text("RGB controls", color = Color.White) },
+                                leadingIcon = { Icon(Icons.Filled.Palette, contentDescription = null, tint = Color.White) },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    showFpsControls = false
+                                    showRgbControls = true
+                                }
+                            )
+                        }
 
                         HorizontalDivider()
 
@@ -936,7 +942,10 @@ fun DemoScreen() {
             }
         }
 
-        if (showRgbControls) {
+        // Also guard the panel itself, not just the menu entry that opens it -
+        // covers the case where RGB controls were already open and the user
+        // then hot-swaps to a GelSight Mini without closing the panel first.
+        if (showRgbControls && matchedSensor?.folderName != "GelSightMini") {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
