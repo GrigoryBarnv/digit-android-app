@@ -31,7 +31,8 @@ data class ResolutionFpsOption(
  * device via getAllPreviewSizes().
  *
  * Verified specs:
- *   DIGIT        : 320x240 @ 60 fps   (Meta)
+ *   DIGIT        : QVGA 320x240 @ 60/30 fps, VGA 640x480 @ 30/15 fps
+ *                  (Meta's official digit-interface DigitDefaults)
  *   GelSight Mini: ~320x240 @ 25 fps  (datasheet: 8MP cam, 25 FPS; streams a
  *                                      downsampled image — exact live size is
  *                                      best read from the device at runtime)
@@ -90,18 +91,27 @@ object SupportedSensors {
             nativeWidth = 320,     // DIGIT streams 320x240
             nativeHeight = 240,
             folderName = "Digit",
-            // 640x480 @ 30fps was listed here as "verified" (research diary,
-            // 04.06.2026 meeting notes), but real-device testing confirmed
-            // the sensor actually rejects it - the native camera library
-            // logs "setPreviewSize failed(format is 1), try to use other
-            // format..." and then crashes (native SIGABRT inside
-            // UVCPreview::stopPreview(), a bug in the vendored camera
-            // library when cleaning up after a preview that never
-            // successfully started). Removed until 640x480 can be properly
-            // re-verified - only the two confirmed-working combos remain.
+            // Per Meta's official digit-interface driver (DigitDefaults):
+            //   VGA  (640x480): 30fps (default), 15fps
+            //   QVGA (320x240): 60fps (default), 30fps
+            //
+            // 640x480 @ 30fps was previously removed from this list (research
+            // diary, 04.06.2026 meeting notes) after real-device testing hit
+            // a native crash - the camera library logged "setPreviewSize
+            // failed(format is 1), try to use other format..." (format 1 =
+            // MJPEG) and then crashed (native SIGABRT inside
+            // UVCPreview::stopPreview(), cleaning up after a preview that
+            // never successfully started). That failure required an MJPEG
+            // attempt to happen FIRST - CameraPreviewFragment.getCameraRequest()
+            // now hardcodes FORMAT_YUYV specifically so MJPEG is never tried,
+            // which should prevent this exact crash path, but 640x480 hasn't
+            // been re-verified against a real DIGIT unit since that change -
+            // test it on hardware before relying on it.
             resolutionFpsOptions = listOf(
                 ResolutionFpsOption(320, 240, 30),
                 ResolutionFpsOption(320, 240, 60),
+                ResolutionFpsOption(640, 480, 15),
+                ResolutionFpsOption(640, 480, 30),
             ),
         ),
         SupportedSensor(
