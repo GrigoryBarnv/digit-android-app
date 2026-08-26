@@ -210,15 +210,34 @@ private fun CircularNavButton(
 }
 
 /**
- * A stepped (0 / half / max) FPS slider that shows a floating value bubble
- * above the thumb while it's being dragged, tracking the thumb's horizontal
- * position - similar to Android's native brightness/volume sliders.
+ * A stepped FPS slider that only lands on [stops] - the sensor's actually
+ * verified fps values (e.g. DIGIT: 15/30/60, from its VGA/QVGA specs) -
+ * rather than an arbitrary continuous 0..max range. Shows a floating value
+ * bubble above the thumb while it's being dragged, tracking the thumb's
+ * horizontal position - similar to Android's native brightness/volume
+ * sliders.
+ *
+ * [stops] must be non-empty; a single stop (e.g. GelSight Mini's one
+ * datasheet combo) is shown as a plain fixed-rate label instead of an
+ * interactive slider, since there's nothing to actually pick between.
  */
 @Composable
-private fun FpsSliderWithLabel(value: Float, onValueChange: (Float) -> Unit, maxFps: Int) {
+private fun FpsSliderWithLabel(stops: List<Int>, value: Float, onValueChange: (Float) -> Unit) {
+    if (stops.size < 2) {
+        Text(
+            stops.firstOrNull()?.let { "Fixed at $it fps" } ?: "—",
+            color = Color(0xFF9A9A9A),
+            fontSize = 13.sp,
+            modifier = Modifier.padding(vertical = 8.dp)
+        )
+        return
+    }
+
     val interactionSource = remember { MutableInteractionSource() }
     val isDragged by interactionSource.collectIsDraggedAsState()
-    val fraction = (value / maxFps.toFloat()).coerceIn(0f, 1f)
+    val maxIndex = stops.size - 1
+    val currentIndex = stops.indexOf(value.roundToInt()).let { if (it >= 0) it else 0 }
+    val fraction = currentIndex / maxIndex.toFloat()
 
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         if (isDragged) {
@@ -229,14 +248,16 @@ private fun FpsSliderWithLabel(value: Float, onValueChange: (Float) -> Unit, max
                     .background(Color(0xFF4A4A4A), RoundedCornerShape(8.dp))
                     .padding(horizontal = 10.dp, vertical = 4.dp)
             ) {
-                Text("${value.roundToInt()}", color = Color.White, fontSize = 13.sp)
+                Text("${stops[currentIndex]}", color = Color.White, fontSize = 13.sp)
             }
         }
         Slider(
-            value = value,
-            onValueChange = onValueChange,
-            valueRange = 0f..maxFps.toFloat(),
-            steps = 1,
+            value = currentIndex.toFloat(),
+            onValueChange = { newIndex ->
+                onValueChange(stops[newIndex.roundToInt().coerceIn(stops.indices)].toFloat())
+            },
+            valueRange = 0f..maxIndex.toFloat(),
+            steps = (stops.size - 2).coerceAtLeast(0),
             interactionSource = interactionSource,
             modifier = Modifier.fillMaxWidth(),
             colors = SliderDefaults.colors(
@@ -746,9 +767,17 @@ fun DemoScreen() {
                             leadingIcon = { Icon(Icons.Filled.Speed, contentDescription = null, tint = Color.White) },
                             enabled = ratedFps != null,
                             onClick = {
-                                if (ratedFps != null) {
-                                    fpsSlider.floatValue =
-                                        (CameraPreviewFragment.targetFps.value ?: ratedFps).toFloat()
+                                if (ratedFps != null && matchedSensor != null) {
+                                    // Snap to the nearest actually-valid stop -
+                                    // a leftover target fps from before this
+                                    // sensor's stops were tightened up (or a
+                                    // value from a different sensor entirely)
+                                    // could otherwise land the slider
+                                    // somewhere that isn't one of its stops.
+                                    val initialFps = CameraPreviewFragment.targetFps.value ?: ratedFps
+                                    fpsSlider.floatValue = matchedSensor.fpsStops
+                                        .minByOrNull { kotlin.math.abs(it - initialFps) }
+                                        ?.toFloat() ?: initialFps.toFloat()
                                     selectedResolution.value = CameraPreviewFragment.targetResolution.value
                                     showSettingsMenu = false
                                     showRgbControls = false
@@ -1029,28 +1058,30 @@ fun DemoScreen() {
                     Text("FPS", color = Color.White, fontWeight = FontWeight.Medium)
                     Spacer(modifier = Modifier.height(4.dp))
 
+                    val fpsStops = matchedSensor.fpsStops
+
                     FpsSliderWithLabel(
+                        stops = fpsStops,
                         value = fpsSlider.floatValue,
-                        onValueChange = { fpsSlider.floatValue = it },
-                        maxFps = ratedFps
+                        onValueChange = { fpsSlider.floatValue = it }
                     )
 
-                    Row(modifier = Modifier.fillMaxWidth()) {
-                        Text("0", fontSize = 11.sp, color = Color(0xFF9A9A9A), modifier = Modifier.weight(1f))
-                        Text(
-                            "${ratedFps / 2}",
-                            fontSize = 11.sp,
-                            color = Color(0xFF9A9A9A),
-                            modifier = Modifier.weight(1f),
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                        )
-                        Text(
-                            "$ratedFps",
-                            fontSize = 11.sp,
-                            color = Color(0xFF9A9A9A),
-                            modifier = Modifier.weight(1f),
-                            textAlign = androidx.compose.ui.text.style.TextAlign.End
-                        )
+                    if (fpsStops.size >= 2) {
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            fpsStops.forEachIndexed { index, fps ->
+                                Text(
+                                    "$fps",
+                                    fontSize = 11.sp,
+                                    color = Color(0xFF9A9A9A),
+                                    modifier = Modifier.weight(1f),
+                                    textAlign = when (index) {
+                                        0 -> androidx.compose.ui.text.style.TextAlign.Start
+                                        fpsStops.lastIndex -> androidx.compose.ui.text.style.TextAlign.End
+                                        else -> androidx.compose.ui.text.style.TextAlign.Center
+                                    }
+                                )
+                            }
+                        }
                     }
 
                     // ── Resolution — narrowed to whatever's actually valid at
