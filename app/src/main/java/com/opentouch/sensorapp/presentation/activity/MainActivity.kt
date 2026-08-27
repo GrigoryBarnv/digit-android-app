@@ -44,26 +44,42 @@ class MainActivity : FragmentActivity() {
         // screens back to back.
         val splashScreen = installSplashScreen()
         splashScreen.setOnExitAnimationListener { splashScreenViewProvider ->
-            val icon = splashScreenViewProvider.iconView
-            icon.animate()
-                .scaleX(1.15f)
-                .scaleY(1.15f)
-                .setDuration(180)
-                .setListener(object : AnimatorListenerAdapter() {
-                    override fun onAnimationEnd(animation: Animator) {
-                        icon.animate()
-                            .scaleX(1f)
-                            .scaleY(1f)
-                            .setDuration(150)
-                            .setListener(object : AnimatorListenerAdapter() {
-                                override fun onAnimationEnd(animation: Animator) {
-                                    splashScreenViewProvider.remove()
-                                }
-                            })
-                            .start()
-                    }
-                })
-                .start()
+            // splashScreenViewProvider.iconView throws a NullPointerException
+            // on some OEM devices/Android skins (confirmed crashing on Vivo,
+            // logcat: androidx.core.splashscreen.SplashScreenViewProvider
+            // $ViewImpl31.getIconView -> NPE) - the compat library assumes
+            // the platform always hands back an icon view, but some skins
+            // don't provide one. Guard it so a missing icon view just skips
+            // the pulse animation and removes the splash screen immediately,
+            // instead of crashing the app on every launch on those devices.
+            val icon = try {
+                splashScreenViewProvider.iconView
+            } catch (e: Exception) {
+                null
+            }
+            if (icon == null) {
+                splashScreenViewProvider.remove()
+            } else {
+                icon.animate()
+                    .scaleX(1.15f)
+                    .scaleY(1.15f)
+                    .setDuration(180)
+                    .setListener(object : AnimatorListenerAdapter() {
+                        override fun onAnimationEnd(animation: Animator) {
+                            icon.animate()
+                                .scaleX(1f)
+                                .scaleY(1f)
+                                .setDuration(150)
+                                .setListener(object : AnimatorListenerAdapter() {
+                                    override fun onAnimationEnd(animation: Animator) {
+                                        splashScreenViewProvider.remove()
+                                    }
+                                })
+                                .start()
+                        }
+                    })
+                    .start()
+            }
         }
         super.onCreate(savedInstanceState)
         // Keep the screen on for as long as the app is in the foreground -
