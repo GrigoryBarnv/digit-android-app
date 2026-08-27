@@ -1,8 +1,6 @@
 package com.opentouch.sensorapp.presentation.activity
 
 import android.Manifest
-import android.animation.Animator
-import android.animation.AnimatorListenerAdapter
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.WindowManager
@@ -29,58 +27,21 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         // Must be called before super.onCreate()/setContent(). MainActivity
         // is the launcher activity directly (see AndroidManifest.xml). This
-        // dismisses Android's own unavoidable cold-start icon-only screen
-        // (Theme.Digitapp.Starting) once this activity's first Compose
-        // frame - SplashScreen(), see setContent() below - is ready, and
-        // ONLY once we call splashScreenViewProvider.remove() ourselves
-        // (setting an exit animation listener disables the default
-        // auto-dismiss). Baking "OpenTouch" into that system screen isn't
-        // reliable (confirmed by testing - it center-crops custom images),
-        // and there's no way to skip it outright - so instead of a hard cut
-        // from icon-only to icon+name, this gives the system's icon a small
-        // settle/pulse right as it's removed, timed to land the instant our
-        // own matching icon+"OpenTouch" screen (already composed
-        // underneath) is revealed - one continuous motion rather than two
-        // screens back to back.
-        val splashScreen = installSplashScreen()
-        splashScreen.setOnExitAnimationListener { splashScreenViewProvider ->
-            // splashScreenViewProvider.iconView throws a NullPointerException
-            // on some OEM devices/Android skins (confirmed crashing on Vivo,
-            // logcat: androidx.core.splashscreen.SplashScreenViewProvider
-            // $ViewImpl31.getIconView -> NPE) - the compat library assumes
-            // the platform always hands back an icon view, but some skins
-            // don't provide one. Guard it so a missing icon view just skips
-            // the pulse animation and removes the splash screen immediately,
-            // instead of crashing the app on every launch on those devices.
-            val icon = try {
-                splashScreenViewProvider.iconView
-            } catch (e: Exception) {
-                null
-            }
-            if (icon == null) {
-                splashScreenViewProvider.remove()
-            } else {
-                icon.animate()
-                    .scaleX(1.15f)
-                    .scaleY(1.15f)
-                    .setDuration(180)
-                    .setListener(object : AnimatorListenerAdapter() {
-                        override fun onAnimationEnd(animation: Animator) {
-                            icon.animate()
-                                .scaleX(1f)
-                                .scaleY(1f)
-                                .setDuration(150)
-                                .setListener(object : AnimatorListenerAdapter() {
-                                    override fun onAnimationEnd(animation: Animator) {
-                                        splashScreenViewProvider.remove()
-                                    }
-                                })
-                                .start()
-                        }
-                    })
-                    .start()
-            }
-        }
+        // shows Android's own unavoidable cold-start icon-only screen
+        // (Theme.Digitapp.Starting), which the system dismisses on its own
+        // once this activity's first Compose frame - SplashScreen(), see
+        // setContent() below - is drawn. No custom exit-animation listener
+        // here on purpose: an earlier version pulsed the system's icon via
+        // SplashScreenViewProvider.iconView on exit, but that API throws a
+        // NullPointerException on some OEM Android skins (confirmed
+        // crashing on every launch on a Vivo phone) - not worth the crash
+        // risk for a small transition flourish, especially heading into a
+        // Play Store release that needs to work across arbitrary devices.
+        // Baking "OpenTouch" into the system screen itself isn't reliable
+        // either (confirmed by testing - it center-crops custom images), so
+        // the two screens (system icon, then our icon+"OpenTouch") just
+        // hand off to each other plainly instead.
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         // Keep the screen on for as long as the app is in the foreground -
         // Roberto reported the screen timing out and turning off mid-use
@@ -90,9 +51,9 @@ class MainActivity : FragmentActivity() {
         ensureRuntimePermissions()
         setContent {
             // SplashScreen() (logo + "OpenTouch") is this activity's very
-            // first Compose frame - already sitting underneath the system
-            // icon screen by the time its exit animation above runs. Held
-            // briefly, then MainScreen() takes over. Kept as a state switch
+            // first Compose frame, drawn right after the system's own
+            // icon-only screen dismisses. Held briefly, then MainScreen()
+            // takes over. Kept as a state switch
             // within this same activity/window rather than a separate
             // Activity, so there's no second Activity-launch transition on
             // top of the system's own splash.
