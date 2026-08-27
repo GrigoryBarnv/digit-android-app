@@ -186,13 +186,31 @@ class CameraPreviewFragment : CameraFragment() {
         return binding.root
     }
 
-    // scaleY = -1f flips only the camera image vertically (so the bottom of
-    // the physical sensor maps to the bottom of the screen). This affects
-    // just the camera preview surface — text and other UI on screen are
-    // untouched.
+    // Flips the camera image along the sensor's own vertical axis (so the
+    // bottom of the physical sensor maps to the bottom of the screen). This
+    // affects just the camera preview surface — text and other UI on screen
+    // are untouched.
+    //
+    // Which VIEW axis (scaleX vs scaleY) achieves that depends on
+    // SENSOR_ROTATE_TYPE below: this flip happens in screen space, AFTER
+    // SENSOR_ROTATE_TYPE has already rotated the image in OpenGL (sensor
+    // space). A 90/270 degree rotation swaps the sensor's vertical and
+    // horizontal axes, so a flip that needs to be vertical in sensor space
+    // becomes a HORIZONTAL flip in screen space. Always using scaleY here
+    // (regardless of rotation) combined a real rotation with a flip on the
+    // wrong axis and produced a diagonal mirror instead of the intended
+    // flip - confirmed on-device with a coin pressed on the sensor: digits
+    // and text came out mirrored left-right, not just upside-down.
     override fun getCameraView(): IAspectRatio = FillTextureView(requireContext()).apply {
-        scaleY = -1f
+        if (isSensorRotationQuarterTurn()) {
+            scaleX = -1f
+        } else {
+            scaleY = -1f
+        }
     }
+
+    private fun isSensorRotationQuarterTurn() =
+        SENSOR_ROTATE_TYPE == RotateType.ANGLE_90 || SENSOR_ROTATE_TYPE == RotateType.ANGLE_270
 
     override fun getCameraViewContainer(): ViewGroup = binding.cameraViewContainer
 
@@ -220,8 +238,7 @@ class CameraPreviewFragment : CameraFragment() {
     override fun getCameraRequest(): CameraRequest {
         // Swap dimensions for 90/270 degree rotations so the preview box
         // becomes portrait-shaped to match the rotated image.
-        val isQuarterTurn = SENSOR_ROTATE_TYPE == RotateType.ANGLE_90 ||
-                SENSOR_ROTATE_TYPE == RotateType.ANGLE_270
+        val isQuarterTurn = isSensorRotationQuarterTurn()
         // Base (unrotated) size the user picked via the Settings resolution
         // row - see changePreviewResolution(). Falls back to the 320x240
         // default when nothing has been explicitly requested yet.
@@ -1006,9 +1023,14 @@ class CameraPreviewFragment : CameraFragment() {
                         onDone(false, "Photo was not saved (null path)")
                         return@runOnUiThread
                     }
-                    // Step 1: flip the image vertically to match the live preview.
-                    // scaleY = -1f on the TextureView flips the display but not
-                    // the raw image data — so we flip the saved bitmap here.
+                    // Step 1: flip the image to match the live preview. The
+                    // TextureView's scaleX/scaleY flip (see getCameraView())
+                    // affects the display but not the raw captured image
+                    // data — so we replicate the same flip on the saved
+                    // bitmap here, on whichever axis getCameraView() used
+                    // (see isSensorRotationQuarterTurn() - must stay in sync
+                    // with getCameraView(), or captured photos and the live
+                    // preview will disagree on which way is mirrored).
                     // The library may return either a file path or a content://
                     // URI (Android 10+ MediaStore), so we handle both.
                     try {
@@ -1021,7 +1043,13 @@ class CameraPreviewFragment : CameraFragment() {
                             BitmapFactory.decodeFile(path)
                         }
                         if (bmp != null) {
-                            val matrix = Matrix().apply { preScale(1f, -1f) }
+                            val matrix = Matrix().apply {
+                                if (isSensorRotationQuarterTurn()) {
+                                    preScale(-1f, 1f)
+                                } else {
+                                    preScale(1f, -1f)
+                                }
+                            }
                             val flipped = android.graphics.Bitmap.createBitmap(
                                 bmp, 0, 0, bmp.width, bmp.height, matrix, true
                             )
