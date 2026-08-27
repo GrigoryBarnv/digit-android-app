@@ -1473,10 +1473,14 @@ class CameraPreviewFragment : CameraFragment() {
         private const val FTDI_BOOTLOADER_VENDOR_ID = 0x0403
         private const val FT900_DFU_PRODUCT_ID = 0x0FDE
 
-        // Change this to ANGLE_270 / ANGLE_0 / ANGLE_180 / FLIP_UP_DOWN /
+        // Change this to ANGLE_90 / ANGLE_0 / ANGLE_180 / FLIP_UP_DOWN /
         // FLIP_LEFT_RIGHT to correct the sensor's orientation on screen —
-        // see getCameraRequest() above for details.
-        private val SENSOR_ROTATE_TYPE = RotateType.ANGLE_90
+        // see getCameraRequest() above for details. ANGLE_90 alone (a pure
+        // rotation, no flip - see getCameraView()) showed the image upside
+        // down but correctly NOT mirrored (confirmed on-device: "RUPEES"
+        // and "5" read correctly once rotated another 180 degrees) -
+        // ANGLE_270 is exactly ANGLE_90 plus that missing 180 degrees.
+        private val SENSOR_ROTATE_TYPE = RotateType.ANGLE_270
 
         @Volatile
         private var activeInstance: CameraPreviewFragment? = null
