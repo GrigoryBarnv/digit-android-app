@@ -94,6 +94,12 @@ class CameraPreviewFragment : CameraFragment() {
     // Cancel look like it does nothing.
     private var awaitingManualReconnect = false
 
+    // TEMP DIAGNOSTIC — true only while a capturePhoto() call is in flight.
+    // Included in the onCameraState(CLOSED) trace log so we can see whether
+    // a close during capture is really happening, or just a coincidence of
+    // timing. Safe to remove once the capture-disconnect bug is root-caused.
+    private var isCapturingDiag = false
+
     // ─── FPS measurement (read-only display in Settings) ──────────────────────
     // Counts preview frames between samples. Incremented on the camera thread,
     // read+reset once per second on the main thread — a single Int write/read is
@@ -430,6 +436,16 @@ class CameraPreviewFragment : CameraFragment() {
                 }
             }
             ICameraStateCallBack.State.CLOSED -> {
+                // TEMP DIAGNOSTIC — logs a fake stack trace so we can see
+                // WHAT called closeCamera() the next time the "camera
+                // disconnected" message shows up unexpectedly (e.g. right
+                // after taking a photo). Safe to remove once the capture-
+                // disconnect bug is root-caused.
+                Logger.w(
+                    "CameraPreviewFragment",
+                    "onCameraState CLOSED msg=$msg declinedClose=$declinedClose pausedForZeroFps=$pausedForZeroFps isCapturingNow=$isCapturingDiag",
+                    Exception("CLOSED-trace")
+                )
                 statusPillView?.visibility = View.VISIBLE
                 disconnectedOverlay?.visibility = View.VISIBLE
                 stopFpsMeasurement()
@@ -973,6 +989,8 @@ class CameraPreviewFragment : CameraFragment() {
      *   success = false and an error message
      */
     fun capturePhoto(onDone: (success: Boolean, path: String?) -> Unit) {
+        // TEMP DIAGNOSTIC — see isCapturingDiag's comment.
+        Logger.w("CameraPreviewFragment", "capturePhoto() called, isCameraReady=$isCameraReady")
         if (!isCameraReady) {
             onDone(false, "Camera is not ready yet")
             return
@@ -1000,14 +1018,21 @@ class CameraPreviewFragment : CameraFragment() {
             return
         }
 
+        isCapturingDiag = true
         captureImage(object : ICaptureCallBack {
-            override fun onBegin() {}
+            override fun onBegin() {
+                Logger.w("CameraPreviewFragment", "capturePhoto onBegin()")
+            }
 
             override fun onError(error: String?) {
+                Logger.w("CameraPreviewFragment", "capturePhoto onError: $error")
+                isCapturingDiag = false
                 activity?.runOnUiThread { onDone(false, error ?: "Unknown capture error") }
             }
 
             override fun onComplete(path: String?) {
+                Logger.w("CameraPreviewFragment", "capturePhoto onComplete: path=$path")
+                isCapturingDiag = false
                 activity?.runOnUiThread {
                     if (path == null) {
                         onDone(false, "Photo was not saved (null path)")
