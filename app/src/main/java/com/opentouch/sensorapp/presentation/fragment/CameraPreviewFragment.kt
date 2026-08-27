@@ -8,8 +8,6 @@ import android.hardware.usb.UsbManager
 import android.content.Context
 import android.content.ContentValues
 import android.content.pm.PackageManager
-import android.graphics.BitmapFactory
-import android.graphics.Matrix
 import android.media.MediaScannerConnection
 import android.os.Build
 import android.os.Environment
@@ -186,28 +184,20 @@ class CameraPreviewFragment : CameraFragment() {
         return binding.root
     }
 
-    // Flips the camera image along the sensor's own vertical axis (so the
-    // bottom of the physical sensor maps to the bottom of the screen). This
-    // affects just the camera preview surface — text and other UI on screen
-    // are untouched.
-    //
-    // Which VIEW axis (scaleX vs scaleY) achieves that depends on
-    // SENSOR_ROTATE_TYPE below: this flip happens in screen space, AFTER
-    // SENSOR_ROTATE_TYPE has already rotated the image in OpenGL (sensor
-    // space). A 90/270 degree rotation swaps the sensor's vertical and
-    // horizontal axes, so a flip that needs to be vertical in sensor space
-    // becomes a HORIZONTAL flip in screen space. Always using scaleY here
-    // (regardless of rotation) combined a real rotation with a flip on the
-    // wrong axis and produced a diagonal mirror instead of the intended
-    // flip - confirmed on-device with a coin pressed on the sensor: digits
-    // and text came out mirrored left-right, not just upside-down.
-    override fun getCameraView(): IAspectRatio = FillTextureView(requireContext()).apply {
-        if (isSensorRotationQuarterTurn()) {
-            scaleX = -1f
-        } else {
-            scaleY = -1f
-        }
-    }
+    // No scaleX/scaleY flip here - deliberately. Combining ANY single-axis
+    // flip (scaleX=-1 or scaleY=-1) with SENSOR_ROTATE_TYPE's 90/270 degree
+    // GL rotation below always produces a mirror image, regardless of which
+    // axis is picked (confirmed with matrix math: a 90-degree rotation has
+    // determinant +1, any single-axis flip has determinant -1, and +1 * -1
+    // is always -1 - i.e. always a mirror, no matter which axis). Two
+    // earlier attempts (scaleY, then scaleX) both produced a mirrored image
+    // on-device (confirmed with a coin pressed on the sensor - readable
+    // text came out backwards both times). Since the old Digit app applied
+    // no rotation AND no flip at all and displayed correctly (confirmed via
+    // git history), the sensor doesn't need flipping - it only needs
+    // rotating to fit portrait, which SENSOR_ROTATE_TYPE alone (a pure
+    // rotation, no mirroring) already does correctly.
+    override fun getCameraView(): IAspectRatio = FillTextureView(requireContext())
 
     private fun isSensorRotationQuarterTurn() =
         SENSOR_ROTATE_TYPE == RotateType.ANGLE_90 || SENSOR_ROTATE_TYPE == RotateType.ANGLE_270
@@ -1023,52 +1013,13 @@ class CameraPreviewFragment : CameraFragment() {
                         onDone(false, "Photo was not saved (null path)")
                         return@runOnUiThread
                     }
-                    // Step 1: flip the image to match the live preview. The
-                    // TextureView's scaleX/scaleY flip (see getCameraView())
-                    // affects the display but not the raw captured image
-                    // data — so we replicate the same flip on the saved
-                    // bitmap here, on whichever axis getCameraView() used
-                    // (see isSensorRotationQuarterTurn() - must stay in sync
-                    // with getCameraView(), or captured photos and the live
-                    // preview will disagree on which way is mirrored).
-                    // The library may return either a file path or a content://
-                    // URI (Android 10+ MediaStore), so we handle both.
-                    try {
-                        val isContentUri = path.startsWith("content://")
-                        val uri = if (isContentUri) android.net.Uri.parse(path) else null
-                        val bmp = if (uri != null) {
-                            requireContext().contentResolver.openInputStream(uri)
-                                ?.use { BitmapFactory.decodeStream(it) }
-                        } else {
-                            BitmapFactory.decodeFile(path)
-                        }
-                        if (bmp != null) {
-                            val matrix = Matrix().apply {
-                                if (isSensorRotationQuarterTurn()) {
-                                    preScale(-1f, 1f)
-                                } else {
-                                    preScale(1f, -1f)
-                                }
-                            }
-                            val flipped = android.graphics.Bitmap.createBitmap(
-                                bmp, 0, 0, bmp.width, bmp.height, matrix, true
-                            )
-                            bmp.recycle()
-                            if (uri != null) {
-                                requireContext().contentResolver.openOutputStream(uri, "rwt")
-                                    ?.use { fos ->
-                                        flipped.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, fos)
-                                    }
-                            } else {
-                                java.io.FileOutputStream(path).use { fos ->
-                                    flipped.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, fos)
-                                }
-                            }
-                            flipped.recycle()
-                        }
-                    } catch (e: Exception) {
-                        Logger.e("CameraPreviewFragment", "flip failed: ${e.message}")
-                    }
+                    // No flip step here - deliberately. getCameraView() no
+                    // longer applies any scaleX/scaleY flip to the live
+                    // preview (see that function's comment - a flip
+                    // combined with SENSOR_ROTATE_TYPE's rotation always
+                    // produced a mirror image), so the raw captured bitmap
+                    // now already matches the live preview as-is, with no
+                    // extra transform needed here to keep them in sync.
                     // Step 2: write metadata into the temp file
                     writeMetadata(path)
                     // Step 2: move to public Pictures/OpenTouch_<sensor>/ folder
