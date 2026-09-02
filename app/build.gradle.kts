@@ -16,8 +16,8 @@ android {
         applicationId = "com.opentouch.sensorapp"
         minSdk = 24
         targetSdk = 36
-        versionCode = 10
-        versionName = "1.1.10"
+        versionCode = 11
+        versionName = "1.1.11"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -77,6 +77,7 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation("androidx.compose.material:material-icons-extended")
     implementation(project(":libausbc"))
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.23.2")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
     // Lets MainActivity call installSplashScreen() and take explicit control
     // of the system's mandatory cold-start icon screen (dismiss it the instant

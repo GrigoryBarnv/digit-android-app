@@ -180,7 +180,12 @@ int UVCPreview::setPreviewSize(int width, int height, int min_fps, int max_fps, 
 	ENTER();
 	
 	int result = 0;
-	if ((requestWidth != width) || (requestHeight != height) || (requestMode != mode)) {
+	const bool sizeOrModeChanged =
+		(requestWidth != width) || (requestHeight != height) || (requestMode != mode);
+	const bool streamParametersChanged =
+		sizeOrModeChanged || (requestMinFps != min_fps)
+		|| (requestMaxFps != max_fps) || (requestBandwidth != bandwidth);
+	if (streamParametersChanged) {
 		requestWidth = width;
 		requestHeight = height;
 		requestMinFps = min_fps;
@@ -205,10 +210,6 @@ int UVCPreview::setPreviewDisplay(ANativeWindow *preview_window) {
 			if (mPreviewWindow)
 				ANativeWindow_release(mPreviewWindow);
 			mPreviewWindow = preview_window;
-			if (LIKELY(mPreviewWindow)) {
-				ANativeWindow_setBuffersGeometry(mPreviewWindow,
-					frameWidth, frameHeight, previewFormat);
-			}
 		}
 	}
 	pthread_mutex_unlock(&preview_mutex);
@@ -437,7 +438,14 @@ void UVCPreview::uvc_preview_frame_callback(uvc_frame_t *frame, void *vptr_args)
 void UVCPreview::addPreviewFrame(uvc_frame_t *frame) {
 
 	pthread_mutex_lock(&preview_mutex);
-	if (isRunning() && (previewFrames.size() < MAX_FRAME)) {
+	if (isRunning()) {
+		// At 640x480 conversion can take longer than the USB callback interval.
+		// Keep the newest complete frame so the renderer never works through a
+		// stale queue after a resolution change.
+		while (previewFrames.size() >= MAX_FRAME) {
+			uvc_frame_t *stale = previewFrames.remove(0);
+			recycle_frame(stale);
+		}
 		previewFrames.put(frame);
 		frame = NULL;
 		pthread_cond_signal(&preview_sync);
@@ -587,26 +595,7 @@ void UVCPreview::do_preview(uvc_stream_ctrl_t *ctrl) {
 }
 
 static void copyFrame(const uint8_t *src, uint8_t *dest, const int width, int height, const int stride_src, const int stride_dest) {
-	const int h8 = height % 8;
-	for (int i = 0; i < h8; i++) {
-		memcpy(dest, src, width);
-		dest += stride_dest; src += stride_src;
-	}
-	for (int i = 0; i < height; i += 8) {
-		memcpy(dest, src, width);
-		dest += stride_dest; src += stride_src;
-		memcpy(dest, src, width);
-		dest += stride_dest; src += stride_src;
-		memcpy(dest, src, width);
-		dest += stride_dest; src += stride_src;
-		memcpy(dest, src, width);
-		dest += stride_dest; src += stride_src;
-		memcpy(dest, src, width);
-		dest += stride_dest; src += stride_src;
-		memcpy(dest, src, width);
-		dest += stride_dest; src += stride_src;
-		memcpy(dest, src, width);
-		dest += stride_dest; src += stride_src;
+	for (int i = 0; i < height; i++) {
 		memcpy(dest, src, width);
 		dest += stride_dest; src += stride_src;
 	}

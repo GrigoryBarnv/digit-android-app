@@ -227,11 +227,15 @@ class CameraUVC(ctx: Context, device: UsbDevice) : MultiCameraClient.ICamera(ctx
             initEncodeProcessor(previewSize.width, previewSize.height)
             // if give custom minFps or maxFps or unsupported preview size
             // this method will fail
+            // Request the exact selected interval. A broad 1..N range lets
+            // libuvc choose the first descriptor it finds, which can make a
+            // 640x480 request run at 30 FPS even when the user selected 15.
+            val requestedFps = MAX_FPS
             mUvcCamera?.setPreviewSize(
                 previewSize.width,
                 previewSize.height,
-                MIN_FS,
-                MAX_FPS,
+                requestedFps,
+                requestedFps,
                 previewFormat,
                 UVCCamera.DEFAULT_BANDWIDTH
             )
@@ -254,7 +258,7 @@ class CameraUVC(ctx: Context, device: UsbDevice) : MultiCameraClient.ICamera(ctx
                 mUvcCamera?.setPreviewSize(
                     previewSize.width,
                     previewSize.height,
-                    MIN_FS,
+                    MAX_FPS,
                     MAX_FPS,
                     if (previewFormat == UVCCamera.FRAME_FORMAT_YUYV) {
                         UVCCamera.FRAME_FORMAT_MJPEG
@@ -281,6 +285,11 @@ class CameraUVC(ctx: Context, device: UsbDevice) : MultiCameraClient.ICamera(ctx
                 mUvcCamera?.setPreviewDisplay(cameraView)
             }
             is SurfaceTexture -> {
+                // Let the native UVC layer set the SurfaceTexture buffer from
+                // the negotiated frame descriptor. Java-side buffer sizing
+                // is unreliable for this sensor at 640x480 and can produce
+                // repeated vertical bands; the native preview window updates
+                // the geometry immediately before frames are delivered.
                 mUvcCamera?.setPreviewTexture(cameraView)
             }
             is SurfaceView -> {
@@ -305,7 +314,6 @@ class CameraUVC(ctx: Context, device: UsbDevice) : MultiCameraClient.ICamera(ctx
     }
 
     override fun closeCameraInternal() {
-        postStateEvent(ICameraStateCallBack.State.CLOSED)
         isPreviewed = false
         releaseEncodeProcessor()
         mUvcCamera?.destroy()

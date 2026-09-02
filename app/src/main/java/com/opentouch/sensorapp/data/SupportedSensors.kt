@@ -2,10 +2,10 @@ package com.opentouch.sensorapp.data
 
 /**
  * One verified (resolution, frame rate) combination a sensor can actually
- * stream at. The Settings FPS slider snaps to 0 / half / max of a sensor's
- * rated max fps; [ResolutionFpsOption.fps] values are matched against
- * whichever of those the slider is at to decide which resolution(s) to
- * offer - see SupportedSensor.resolutionOptionsForFps(). This is a plain
+ * stream at. The Settings FPS slider snaps to the verified rates for the
+ * currently stable stream modes; [ResolutionFpsOption.fps] values are matched
+ * against whichever of those the slider is at to decide which resolution(s)
+ * to offer - see SupportedSensor.resolutionOptionsForFps(). This is a plain
  * data list rather than logic branching on literal fps values so that
  * adding a sensor, or adding a newly-verified combo to an existing one,
  * never requires touching UI code - see the 3 July 2026 research diary
@@ -110,19 +110,6 @@ object SupportedSensors {
             // Per Meta's official digit-interface driver (DigitDefaults):
             //   VGA  (640x480): 30fps (default), 15fps
             //   QVGA (320x240): 60fps (default), 30fps
-            //
-            // 640x480 @ 30fps was previously removed from this list (research
-            // diary, 04.06.2026 meeting notes) after real-device testing hit
-            // a native crash - the camera library logged "setPreviewSize
-            // failed(format is 1), try to use other format..." (format 1 =
-            // MJPEG) and then crashed (native SIGABRT inside
-            // UVCPreview::stopPreview(), cleaning up after a preview that
-            // never successfully started). That failure required an MJPEG
-            // attempt to happen FIRST - CameraPreviewFragment.getCameraRequest()
-            // now hardcodes FORMAT_YUYV specifically so MJPEG is never tried,
-            // which should prevent this exact crash path, but 640x480 hasn't
-            // been re-verified against a real DIGIT unit since that change -
-            // test it on hardware before relying on it.
             resolutionFpsOptions = listOf(
                 ResolutionFpsOption(320, 240, 30),
                 ResolutionFpsOption(320, 240, 60),

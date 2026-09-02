@@ -40,6 +40,7 @@ import java.nio.ByteOrder
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -107,12 +108,9 @@ class RenderManager(
     /**
      * Rendering processing logic
      *
-     * Note: EGL must be initialized first, otherwise GL cannot run
+    * Note: EGL must be initialized first, otherwise GL cannot run
      */
     override fun handleMessage(msg: Message): Boolean {
-        val frameProductionDelayMillis = 35 // Adjust the delay as needed
-        Thread.sleep(frameProductionDelayMillis.toLong())
-        Logger.i(TAG,"buffer3")
         when (msg.what) {
             MSG_GL_INIT -> {
                 (msg.obj as Triple<*, *, *>).apply {
@@ -137,7 +135,6 @@ class RenderManager(
                     mCameraRender?.setSize(mWidth, mHeight)
                     mScreenRender?.setSize(mWidth, mHeight)
                     mCaptureRender?.setSize(mWidth, mHeight)
-                    mCameraSurfaceTexture?.setDefaultBufferSize(mWidth, mHeight)
                 }
             }
             MSG_GL_SAVE_IMAGE -> {
@@ -204,19 +201,23 @@ class RenderManager(
                 }
             }
             MSG_GL_RELEASE -> {
-                EventBus.with<Boolean>(BusKey.KEY_RENDER_READY).postMessage(false)
-                mEffectList.forEach { effect ->
-                    effect.releaseGLES()
-                }
-                mEffectList.clear()
-                mCameraRender?.releaseGLES()
-                mScreenRender?.releaseGLES()
-                mCaptureRender?.releaseGLES()
-                mCameraSurfaceTexture?.setOnFrameAvailableListener(null)
-                mCameraSurfaceTexture = null
+                releaseRenderInternal()
             }
         }
         return true
+    }
+
+    private fun releaseRenderInternal() {
+        EventBus.with<Boolean>(BusKey.KEY_RENDER_READY).postMessage(false)
+        mEffectList.forEach { effect ->
+            effect.releaseGLES()
+        }
+        mEffectList.clear()
+        mCameraRender?.releaseGLES()
+        mScreenRender?.releaseGLES()
+        mCaptureRender?.releaseGLES()
+        mCameraSurfaceTexture?.setOnFrameAvailableListener(null)
+        mCameraSurfaceTexture = null
     }
 
     private fun drawFrame2Capture(fboId: Int) {
@@ -265,7 +266,12 @@ class RenderManager(
             Logger.e(TAG, "wait for creating camera SurfaceTexture failed")
             null
         }?.apply {
-            setDefaultBufferSize(w, h)
+            // Keep the producer buffer in the same native landscape geometry
+            // as the UVC stream. Using the measured portrait screen size here
+            // makes a 640x480 stream appear as repeated vertical bands.
+            if (surfaceWidth > 0 && surfaceHeight > 0) {
+                setDefaultBufferSize(surfaceWidth, surfaceHeight)
+            }
             setOnFrameAvailableListener(this@RenderManager)
             mCameraSurfaceTexture = this
         }.also {
@@ -279,8 +285,39 @@ class RenderManager(
      * Stop render screen
      */
     fun stopRenderScreen() {
-        mRenderHandler?.obtainMessage(MSG_GL_RELEASE)?.sendToTarget()
-        mRenderThread?.quitSafely()
+        val renderThread = mRenderThread
+        val renderHandler = mRenderHandler
+        if (renderThread != null && renderHandler != null) {
+            val stoppingFromRenderThread = Looper.myLooper() == renderThread.looper
+            if (stoppingFromRenderThread) {
+                releaseRenderInternal()
+                renderThread.quitSafely()
+            } else {
+                val released = CountDownLatch(1)
+                // Discard pending draws before releasing the EGL context. A
+                // queued draw from the old resolution must not run alongside
+                // the renderer that is opened for the new resolution.
+                renderHandler.removeCallbacksAndMessages(null)
+                renderHandler.post {
+                    try {
+                        releaseRenderInternal()
+                    } finally {
+                        released.countDown()
+                    }
+                }
+                try {
+                    released.await(3, TimeUnit.SECONDS)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+                renderThread.quitSafely()
+                try {
+                    renderThread.join(3_000)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+            }
+        }
         mRenderThread = null
         mRenderHandler = null
     }
@@ -361,10 +398,15 @@ class RenderManager(
     }
 
     override fun onFrameAvailable(surfaceTexture: SurfaceTexture?) {
-//        val delayMillis = 35
-//        Thread.sleep(delayMillis.toLong())
         emitFrameRate()
-        mRenderHandler?.obtainMessage(MSG_GL_DRAW)?.sendToTarget()
+        // Coalesce frame requests. If rendering is slower than the sensor,
+        // retaining every draw message creates an ever-growing stale-frame
+        // queue and can make the TextureView appear split or displaced.
+        mRenderHandler?.let { handler ->
+            if (!handler.hasMessages(MSG_GL_DRAW)) {
+                handler.obtainMessage(MSG_GL_DRAW).sendToTarget()
+            }
+        }
     }
 
     private fun startRenderCodecInternal(surface: Surface, w: Int, h: Int) {
@@ -485,7 +527,14 @@ class RenderManager(
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             values.put(MediaStore.Images.ImageColumns.DATA, path)
         }
-        mContext.contentResolver?.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+        // A custom path is normally a private/intermediate file owned by the
+        // caller. Registering that same temporary path in MediaStore causes a
+        // UNIQUE _data failure when the next capture reuses it. Callers that
+        // provide a custom path are responsible for publishing the finished
+        // file; only the library's default DCIM path should be indexed here.
+        if (savePath == null) {
+            mContext.contentResolver?.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+        }
         mMainHandler.post {
             mCaptureDataCb?.onComplete(path)
         }

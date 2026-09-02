@@ -45,6 +45,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 // ─── Recording state shared with DemoScreen ──────────────────────────────────
@@ -77,6 +78,11 @@ class CameraPreviewFragment : CameraFragment() {
     // onCameraState(CLOSED) so the auto-reconnect loop does not immediately
     // reopen the camera while paused.
     private var pausedForZeroFps = false
+
+    // True while the user is reviewing a captured image in AI mode. This is
+    // different from FPS=0: the camera must stay closed until the user picks
+    // None, without starting the normal reconnect loop.
+    private var pausedForAnalysis = false
 
     // True while the app is backgrounded (between onPause and onResume).
     // Guards against onCameraState(CLOSED) restarting the permission-retry
@@ -139,10 +145,28 @@ class CameraPreviewFragment : CameraFragment() {
                 lastSampleTime = now
                 val frames = frameTick
                 frameTick = 0
-                _currentFps.value = if (elapsedSeconds > 0f) {
+                val measuredFps = if (elapsedSeconds > 0f) {
                     (frames / elapsedSeconds).roundToInt()
                 } else {
                     frames
+                }
+
+                // The selected UVC mode is a fixed target. A one-second
+                // sample can still land one or two frames high/low because
+                // the sample starts and ends between USB frame deliveries.
+                // Report the selected target inside that small measurement
+                // band so the Settings value remains stable (15 stays 15,
+                // 60 stays 60). A larger mismatch is left visible so a real
+                // USB/host throughput problem is not hidden.
+                val targetFps = _targetFps.value
+                _currentFps.value = if (
+                    targetFps != null &&
+                    measuredFps > 0 &&
+                    abs(measuredFps - targetFps) <= FPS_DISPLAY_TOLERANCE
+                ) {
+                    targetFps
+                } else {
+                    measuredFps
                 }
             }
         }
@@ -218,12 +242,10 @@ class CameraPreviewFragment : CameraFragment() {
      * upright (portrait), with the sensor's flat edge at the bottom of the
      * screen and its rounded edge at the top.
      *
-     * Two things work together to do this:
-     *  1. [SENSOR_ROTATE_TYPE] rotates the actual image content.
-     *  2. When that rotation is 90 or 270 degrees, we swap the width/height we
-     *     report below (320x240 -> 240x320) so the preview BOX is portrait-
-     *     shaped too — otherwise the rotated image would be squeezed into a
-     *     landscape-shaped box with black bars.
+     * [SENSOR_ROTATE_TYPE] rotates the actual image content. The camera request
+     * below always stays in the sensor's native landscape orientation; the
+     * FillTextureView fills the already portrait-shaped preview container and
+     * does not need a rotated width/height request.
      *
      * [SENSOR_ROTATE_TYPE] is the only thing you need to change: with the
      * sensor plugged in and the preview showing, try ANGLE_90, ANGLE_270,
@@ -232,19 +254,16 @@ class CameraPreviewFragment : CameraFragment() {
      * the box upright with the flat edge at the bottom.
      */
     override fun getCameraRequest(): CameraRequest {
-        // Swap dimensions for 90/270 degree rotations so the preview box
-        // becomes portrait-shaped to match the rotated image.
-        val isQuarterTurn = isSensorRotationQuarterTurn()
         // Base (unrotated) size the user picked via the Settings resolution
         // row - see changePreviewResolution(). Falls back to the 320x240
-        // default when nothing has been explicitly requested yet.
+        // default when nothing has been explicitly requested yet. Keep this
+        // request in the sensor's native landscape orientation so the UVC
+        // buffer, SurfaceTexture buffer, and renderer all use one geometry.
         val (baseWidth, baseHeight) = _targetResolution.value ?: (320 to 240)
-        val width = if (isQuarterTurn) baseHeight else baseWidth
-        val height = if (isQuarterTurn) baseWidth else baseHeight
 
         return CameraRequest.Builder()
-            .setPreviewWidth(width)
-            .setPreviewHeight(height)
+            .setPreviewWidth(baseWidth)
+            .setPreviewHeight(baseHeight)
             .setRenderMode(CameraRequest.RenderMode.OPENGL)
             .setDefaultRotateType(SENSOR_ROTATE_TYPE)
 
@@ -407,9 +426,24 @@ class CameraPreviewFragment : CameraFragment() {
                         lastDetectedDeviceKey = key
                         detectionSequence++
                         _connectDecision = ConnectDecision.NONE
-                        // New physical sensor - forget any FPS/resolution
-                        // choice made for a previously connected sensor.
-                        _targetFps.value = null
+                        // New physical sensor - start at the library's
+                        // default mode instead of showing the sensor's
+                        // maximum as if it were the active mode. DIGIT
+                        // starts at 30 FPS; sensors with another verified
+                        // default use their first non-zero supported stop.
+                        val sensor = SupportedSensors.classify(
+                            device.vendorId,
+                            device.productId,
+                            device.productName
+                        ).sensor
+                        _targetFps.value = sensor?.fpsStops
+                            ?.firstOrNull { it == DEFAULT_PREVIEW_FPS }
+                            ?: sensor?.fpsStops?.firstOrNull { it > 0 }
+                            ?: sensor?.maxFps
+                            ?: DEFAULT_PREVIEW_FPS
+
+                        // New physical sensor - forget any resolution choice
+                        // made for a previously connected sensor.
                         _targetResolution.value = null
                     }
                     // Always refresh detectedDevice while a sensor is attached
@@ -470,6 +504,12 @@ class CameraPreviewFragment : CameraFragment() {
                     // the slider off 0 also resumes, via changePreviewFps).
                     statusView.text = "Preview paused (FPS set to 0)"
                     _binding?.reconnectButton?.visibility = View.VISIBLE
+                } else if (pausedForAnalysis) {
+                    // Closed intentionally while the captured image is being
+                    // analyzed. Keep the camera stopped until the user picks
+                    // None in the AI menu.
+                    statusView.text = "Analysis paused"
+                    _binding?.reconnectButton?.visibility = View.GONE
                 } else {
                     // The sensor was unplugged (or the camera otherwise
                     // closed for some other reason). Resume looking for a
@@ -599,6 +639,20 @@ class CameraPreviewFragment : CameraFragment() {
     fun stopCameraForDeclinedSensor() {
         declinedClose = true
         closeCamera()
+    }
+
+    /** Stops streaming for frozen-image AI analysis without auto-reconnecting. */
+    fun pauseCameraForAnalysis() {
+        pausedForAnalysis = true
+        if (isCameraOpened()) closeCamera()
+    }
+
+    /** Resumes the USB camera after the user leaves frozen-image AI mode. */
+    fun resumeCameraAfterAnalysis() {
+        pausedForAnalysis = false
+        if (!isCameraOpened()) {
+            startPermissionOpenRetry(initialDelayMs = 0)
+        }
     }
 
     /**
@@ -1491,6 +1545,8 @@ class CameraPreviewFragment : CameraFragment() {
 
     companion object {
         private const val REQUEST_WRITE_PERMISSION = 1001
+        private const val FPS_DISPLAY_TOLERANCE = 2
+        private const val DEFAULT_PREVIEW_FPS = 30
 
         // FTDI's vendor ID, and the product ID the FT900 chip on the sensor
         // reports while it's still in its bootloader (DFU) mode during boot —
@@ -1688,6 +1744,14 @@ class CameraPreviewFragment : CameraFragment() {
         /** Stops the current recording. Does nothing if no recording is active. */
         fun requestStopRecording() {
             activeInstance?.stopVideoRecording()
+        }
+
+        fun requestPauseForAnalysis() {
+            activeInstance?.pauseCameraForAnalysis()
+        }
+
+        fun requestResumeAfterAnalysis() {
+            activeInstance?.resumeCameraAfterAnalysis()
         }
     }
 }

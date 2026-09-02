@@ -2,8 +2,10 @@ package com.opentouch.sensorapp.presentation.screen
 
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
+import android.net.Uri
 import android.view.View
 import android.widget.Toast
 import androidx.compose.animation.core.RepeatMode
@@ -42,6 +44,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Memory
@@ -50,6 +53,7 @@ import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Troubleshoot
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -66,12 +70,14 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -97,16 +103,22 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.layout.ContentScale
 import androidx.fragment.app.FragmentActivity
 import androidx.fragment.app.FragmentContainerView
 import androidx.fragment.app.commit
 import com.opentouch.sensorapp.R
 import com.opentouch.sensorapp.data.ResolutionFpsOption
 import com.opentouch.sensorapp.data.SupportedSensors
+import com.opentouch.sensorapp.ml.ModelPrediction
+import com.opentouch.sensorapp.ml.ModelRunner
 import com.opentouch.sensorapp.presentation.component.RgbControls
 import com.opentouch.sensorapp.presentation.component.SensorPreviewShape
 import com.opentouch.sensorapp.presentation.fragment.CameraPreviewFragment
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private data class GalleryApp(val label: String, val intent: Intent, val icon: Bitmap?)
 
@@ -132,6 +144,7 @@ private fun CircularNavButton(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     selected: Boolean,
+    enabled: Boolean = true,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     // Sized relative to the available width by the caller (see the
@@ -164,12 +177,20 @@ private fun CircularNavButton(
         label = "navElevation"
     )
     val bgColor by androidx.compose.animation.animateColorAsState(
-        targetValue = if (selected) Color.White else lilac,
+        targetValue = when {
+            !enabled -> Color(0xFF4A4A4A)
+            selected -> Color.White
+            else -> lilac
+        },
         animationSpec = tween(280),
         label = "navBg"
     )
     val iconColor by androidx.compose.animation.animateColorAsState(
-        targetValue = if (selected) lilac else Color.White,
+        targetValue = when {
+            !enabled -> Color(0xFF8A8A8A)
+            selected -> lilac
+            else -> Color.White
+        },
         animationSpec = tween(280),
         label = "navIcon"
     )
@@ -187,6 +208,7 @@ private fun CircularNavButton(
                     .shadow(elevation, CircleShape)
                     .background(bgColor, CircleShape)
                     .clickable(
+                        enabled = enabled,
                         interactionSource = interactionSource,
                         indication = null,
                         onClick = onClick
@@ -200,7 +222,7 @@ private fun CircularNavButton(
         Text(
             label,
             fontSize = 11.sp,
-            color = Color(0xFFC9C9CC),
+            color = if (enabled) Color(0xFFC9C9CC) else Color(0xFF77777C),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center,
@@ -337,6 +359,19 @@ fun DemoScreen() {
     // ── AI model selection ────────────────────────────────────────────────────
     var selectedModel by remember { mutableStateOf("None") }
     var showModelMenu by remember { mutableStateOf(false) }
+    var analysisResult by remember { mutableStateOf<ModelPrediction?>(null) }
+    var analysisError by remember { mutableStateOf<String?>(null) }
+    var analysisBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var isAnalyzing by remember { mutableStateOf(false) }
+    var modelRunner by remember { mutableStateOf<ModelRunner?>(null) }
+    val analysisScope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) {
+        modelRunner = withContext(Dispatchers.IO) { ModelRunner(context) }
+    }
+    DisposableEffect(Unit) {
+        onDispose { modelRunner?.close() }
+    }
 
     // ── Settings menu (FPS / RGB / Resolution) ────────────────────────────────
     var showSettingsMenu by remember { mutableStateOf(false) }
@@ -402,8 +437,56 @@ fun DemoScreen() {
         return "%02d:%02d".format(m, s)
     }
 
+    fun loadCapturedBitmap(path: String): Bitmap? {
+        return try {
+            if (path.startsWith("content://")) {
+                context.contentResolver.openInputStream(Uri.parse(path))?.use { input ->
+                    BitmapFactory.decodeStream(input)
+                }
+            } else {
+                BitmapFactory.decodeFile(path)
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     // ── Capture button handler ────────────────────────────────────────────────
     fun onCaptureClicked() {
+        if (selectedModel != "None") {
+            if (isCapturing || isAnalyzing) return
+            if (isVideoMode) isVideoMode = false
+            isCapturing = true
+            analysisResult = null
+            analysisError = null
+
+            val modelAtCapture = selectedModel
+            val cameraReady = CameraPreviewFragment.requestCapture { success, path ->
+                isCapturing = false
+                if (!success || path == null) {
+                    analysisError = path ?: "Capture failed"
+                    Toast.makeText(context, "Analysis capture failed", Toast.LENGTH_SHORT).show()
+                    return@requestCapture
+                }
+
+                analysisScope.launch {
+                    val bitmap = withContext(Dispatchers.IO) { loadCapturedBitmap(path) }
+                    if (selectedModel == modelAtCapture) {
+                        if (bitmap != null) {
+                            analysisBitmap = bitmap
+                        } else {
+                            analysisError = "Could not read captured image"
+                        }
+                    }
+                }
+            }
+            if (!cameraReady) {
+                isCapturing = false
+                Toast.makeText(context, "Camera not ready", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+
         if (isVideoMode) {
             if (!isRecording) {
                 val started = CameraPreviewFragment.requestStartRecording(
@@ -440,6 +523,29 @@ fun DemoScreen() {
                 isCapturing = false
                 Toast.makeText(context, "Camera not ready", Toast.LENGTH_SHORT).show()
             }
+        }
+    }
+
+    fun repeatAnalysisImage() {
+        analysisBitmap = null
+        analysisResult = null
+        analysisError = null
+        isAnalyzing = false
+    }
+
+    fun analyzeCapturedImage() {
+        val bitmap = analysisBitmap ?: return
+        val runner = modelRunner
+        if (runner == null) {
+            analysisError = "AI model is still loading"
+            return
+        }
+        isAnalyzing = true
+        analysisError = null
+        analysisScope.launch {
+            val result = withContext(Dispatchers.Default) { runner.run(bitmap) }
+            isAnalyzing = false
+            if (selectedModel != "None") analysisResult = result
         }
     }
 
@@ -538,6 +644,15 @@ fun DemoScreen() {
                     }
                 )
 
+                analysisBitmap?.let { bitmap ->
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "Captured image",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.FillBounds
+                    )
+                }
+
                 if (flashAlpha > 0f) {
                     Box(
                         modifier = Modifier
@@ -588,7 +703,10 @@ fun DemoScreen() {
             // fixed at phone-tuned dp values, which looked tiny/misaligned
             // on a tablet.
             val navRestSize = (maxWidth * 0.09f).coerceIn(48.dp, 72.dp)
-            val navSelectedSize = navRestSize + 4.dp
+            // Keep the navigation geometry identical in every state. The
+            // selected color/elevation still communicates state, but changing
+            // the reserved size makes the whole bottom control area reflow.
+            val navSelectedSize = navRestSize
             val navIconSize = navRestSize * 0.4f
             val settingsMenuOffsetX = (maxWidth * 0.09f).coerceIn(16.dp, 100.dp)
             // Unlike the size/Settings-offset values above, this correction is
@@ -598,6 +716,11 @@ fun DemoScreen() {
             // left. A tablet has plenty of room there already, so this stays
             // capped close to the phone-tuned value instead of scaling up.
             val aiMenuOffsetX = -(maxWidth * 0.074f).coerceIn(8.dp, 28.dp)
+            val captureSize = (maxWidth * 0.18f).coerceIn(56.dp, 96.dp)
+            // Reserve enough height for either the shutter or the circular AI
+            // actions. This keeps the panel and weighted preview identical in
+            // every AI state, including while an analysis result changes.
+            val captureRowHeight = maxOf(captureSize, navSelectedSize + 30.dp)
 
             Column(
                 modifier = Modifier
@@ -612,6 +735,7 @@ fun DemoScreen() {
             ) {
                 // Gallery button
                 CircularNavButton(
+                    modifier = Modifier.weight(1f),
                     icon = Icons.Filled.PhotoLibrary,
                     label = "Gallery",
                     selected = false,
@@ -676,6 +800,7 @@ fun DemoScreen() {
                 // a two-way switch), unlike AI/Settings below which still open
                 // their menus since they have more than two options.
                 CircularNavButton(
+                    modifier = Modifier.weight(1f),
                     icon = if (isVideoMode) Icons.Filled.Videocam else Icons.Filled.PhotoCamera,
                     label = if (isVideoMode) "Video" else "Photo",
                     selected = isVideoMode,
@@ -686,10 +811,13 @@ fun DemoScreen() {
                 )
 
                 // AI button
-                Box {
+                Box(modifier = Modifier.weight(1f)) {
                     CircularNavButton(
                         icon = Icons.Filled.Memory,
-                        label = if (selectedModel == "None") "AI" else selectedModel,
+                        // The model has two output classes, but it is one
+                        // installed model. Keep the button label stable so the
+                        // bottom navigation never changes width.
+                        label = "AI",
                         selected = selectedModel != "None",
                         restSize = navRestSize,
                         selectedSize = navSelectedSize,
@@ -704,22 +832,31 @@ fun DemoScreen() {
                     ) {
                         DropdownMenuItem(
                             text = { Text("None", color = Color.White) },
-                            onClick = { selectedModel = "None"; showModelMenu = false }
+                            onClick = {
+                                selectedModel = "None"
+                                analysisBitmap = null
+                                analysisResult = null
+                                analysisError = null
+                                isAnalyzing = false
+                                showModelMenu = false
+                            }
                         )
                         DropdownMenuItem(
-                            text = { Text("Model 1", color = Color.White) },
-                            onClick = { selectedModel = "Model 1"; showModelMenu = false }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Model 2", color = Color.White) },
-                            onClick = { selectedModel = "Model 2"; showModelMenu = false }
+                            text = { Text("Key / Finger", color = Color.White) },
+                            onClick = {
+                                selectedModel = "Key / Finger"
+                                isVideoMode = false
+                                analysisResult = null
+                                analysisError = null
+                                showModelMenu = false
+                            }
                         )
                     }
                 }
 
                 // Settings button — hosts FPS (read-only), RGB controls, and
                 // Resolution (read-only spec + live device-reported sizes).
-                Box {
+                Box(modifier = Modifier.weight(1f)) {
                     CircularNavButton(
                         icon = Icons.Filled.Settings,
                         label = "Settings",
@@ -740,14 +877,18 @@ fun DemoScreen() {
                         // FPS controls panel (same pattern as RGB controls below),
                         // with a stepped slider (0 / half / rated max) and an
                         // Apply button.
-                        val ratedFps = matchedSensor?.maxFps
+                        // Show the active mode as the denominator. The
+                        // sensor's max capability is not the active FPS on
+                        // first connection (DIGIT starts at 30 FPS).
+                        val ratedFps = CameraPreviewFragment.targetFps.value
+                            ?: matchedSensor?.maxFps
                         DropdownMenuItem(
                             text = {
                                 Column {
                                     Text(
                                         when {
-                                            ratedFps != null && currentFps > 0 -> "FPS: $currentFps / $ratedFps max"
-                                            ratedFps != null                   -> "FPS: — / $ratedFps max"
+                                            ratedFps != null && currentFps > 0 -> "FPS: $currentFps / $ratedFps"
+                                            ratedFps != null                   -> "FPS: — / $ratedFps"
                                             currentFps > 0                     -> "FPS: $currentFps"
                                             else                               -> "FPS: —"
                                         },
@@ -911,17 +1052,18 @@ fun DemoScreen() {
             BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .height(captureRowHeight + 4.dp)
                     .padding(bottom = 4.dp),
                 contentAlignment = Alignment.Center
             ) {
-                val captureSize = (maxWidth * 0.18f).coerceIn(56.dp, 96.dp)
                 val ringGapSize = captureSize * 0.86f
                 val discSize = captureSize * 0.66f
 
-                Box(
-                    modifier = Modifier.size(captureSize),
-                    contentAlignment = Alignment.Center
-                ) {
+                if (selectedModel == "None" || analysisBitmap == null) {
+                    Box(
+                        modifier = Modifier.size(captureSize),
+                        contentAlignment = Alignment.Center
+                    ) {
                     if (isRecordingPulse) {
                         // Soft glow pulsing outward from the red disc.
                         Box(
@@ -965,6 +1107,93 @@ fun DemoScreen() {
                                 onCaptureClicked()
                             }
                     )
+                    }
+                } else {
+                    // Keep the center slot reserved after capture so the two
+                    // actions stay aligned with the original shutter position.
+                    Spacer(modifier = Modifier.size(captureSize))
+                }
+
+                if (selectedModel != "None") {
+                    // These actions share the shutter row. Their quarter-width
+                    // slots line up with Gallery and Settings without adding a
+                    // second row or pushing the preview upward.
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .width(maxWidth / 4f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularNavButton(
+                            icon = Icons.Filled.Cameraswitch,
+                            label = "New image",
+                            selected = false,
+                            enabled = analysisBitmap != null && !isAnalyzing,
+                            restSize = navSelectedSize,
+                            selectedSize = navSelectedSize,
+                            iconSize = navIconSize,
+                            onClick = { repeatAnalysisImage() }
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .width(maxWidth / 4f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularNavButton(
+                            icon = Icons.Filled.Troubleshoot,
+                            label = "Analyze",
+                            selected = false,
+                            enabled = analysisBitmap != null && !isAnalyzing,
+                            restSize = navSelectedSize,
+                            selectedSize = navSelectedSize,
+                            iconSize = navIconSize,
+                            onClick = { analyzeCapturedImage() }
+                        )
+                    }
+                }
+
+                if (selectedModel != "None" && (isAnalyzing || analysisResult != null || analysisError != null)) {
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .offset(y = 6.dp)
+                            .padding(horizontal = 16.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xDD202126),
+                        border = BorderStroke(1.dp, Color(0xFF594BA0))
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            when {
+                                isAnalyzing -> Text(
+                                    "Analyzing...",
+                                    color = Color.White,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                analysisResult != null -> {
+                                    val result = analysisResult!!
+                                    Text(
+                                        "${result.label.replaceFirstChar { it.uppercase() }} ${(result.confidence * 100f).roundToInt()}%",
+                                        color = Color.White,
+                                        fontSize = 18.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                analysisError != null -> Text(
+                                    analysisError!!,
+                                    color = Color(0xFFFFB4AB),
+                                    fontSize = 13.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                                else -> Unit
+                            }
+                        }
+                    }
                 }
             }
             }

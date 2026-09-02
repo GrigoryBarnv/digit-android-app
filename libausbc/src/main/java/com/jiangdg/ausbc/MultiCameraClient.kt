@@ -371,6 +371,11 @@ class MultiCameraClient(ctx: Context, callback: IDeviceConnectCallBack?) {
                     }
                     mRenderManager?.stopRenderScreen()
                     mRenderManager = null
+                    // Notify the owner only after the camera and its old GL
+                    // SurfaceTexture are both fully stopped. Otherwise the
+                    // reconnect path can create a second renderer while the
+                    // previous one is still drawing into the same TextureView.
+                    postStateEvent(ICameraStateCallBack.State.CLOSED)
                 }
                 MSG_CAPTURE_IMAGE -> {
                     (msg.obj as Pair<*, *>).apply {
