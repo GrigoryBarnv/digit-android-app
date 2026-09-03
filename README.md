@@ -20,7 +20,27 @@ The app connects to a supported USB UVC sensor, shows the live camera preview, a
 - Video recording saved to the device gallery
 - Gallery shortcut
 - RGB illumination controls
-- Placeholder AI model selector for future on-device ML support
+- On-device key/finger image classification
+
+## On-Device ML Model
+
+The current classifier was trained in PyTorch using images from
+`model_key_finger/dataset/key` and `model_key_finger/dataset/finger`. The
+trained model is exported to the portable ONNX format by
+`model_key_finger/export_model.py` so it can run directly on Android without
+a server.
+
+The Android app bundles these files in `app/src/main/assets/models/`:
+
+- `key_finger.onnx` - trained two-class model
+- `labels.txt` - output labels: `key` and `finger`
+- `model_config.json` - input size and RGB normalization settings
+
+When the user captures an image and selects Analyze, `ModelRunner.kt` resizes
+and normalizes the image, runs it with ONNX Runtime, and displays the class
+with the highest probability. The current model was trained with very few
+images, so its predictions are intended for workflow testing rather than
+reliable classification.
 
 ## Project Structure
 
