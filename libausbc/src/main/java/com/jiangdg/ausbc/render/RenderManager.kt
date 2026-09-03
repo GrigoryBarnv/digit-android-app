@@ -122,6 +122,17 @@ class RenderManager(
                     mScreenRender?.initGLES()
                     mCameraRender?.initGLES()
                     mCaptureRender?.initGLES()
+                    // Fixed at the REAL camera preview resolution (surfaceWidth/
+                    // surfaceHeight, passed into the constructor), not the
+                    // on-screen surface size (w/h above). Captures read their
+                    // width/height from this render's own size (see
+                    // saveImageInternal()), so this is what makes a saved photo
+                    // come out at the resolution the user actually selected
+                    // instead of whatever pixel size the preview widget happens
+                    // to be on screen. Deliberately NOT re-sized in
+                    // MSG_GL_CHANGED_SIZE below - only the on-screen renderers
+                    // should track that.
+                    mCaptureRender?.setSize(surfaceWidth, surfaceHeight)
                     mEOSTextureId = mCameraRender?.getCameraTextureId()?.apply {
                         mStFuture.set(SurfaceTexture(this))
                     }
@@ -134,7 +145,13 @@ class RenderManager(
                     mHeight = second as Int
                     mCameraRender?.setSize(mWidth, mHeight)
                     mScreenRender?.setSize(mWidth, mHeight)
-                    mCaptureRender?.setSize(mWidth, mHeight)
+                    // mCaptureRender is deliberately NOT resized here - see the
+                    // comment where it's first sized, in MSG_GL_INIT above. It
+                    // stays fixed at the real camera resolution regardless of
+                    // how the on-screen surface size changes. setDefaultBufferSize
+                    // is also not called here - it's set once in startRenderScreen()
+                    // using surfaceWidth/surfaceHeight, to avoid the vertical-bands
+                    // bug that comes from resizing it to the on-screen surface size.
                 }
             }
             MSG_GL_SAVE_IMAGE -> {
@@ -484,8 +501,13 @@ class RenderManager(
         val title = savePath ?: "IMG_AUSBC_$date"
         val displayName = savePath ?: "$title.jpg"
         val path = savePath ?: "$mCameraDir/$displayName"
-        val width = mWidth
-        val height = mHeight
+        // Read size from mCaptureRender itself (fixed at the real camera
+        // resolution - see MSG_GL_INIT) rather than mWidth/mHeight (the
+        // on-screen surface size). This is what makes the saved photo come
+        // out at the resolution the user actually selected instead of
+        // whatever pixel size the preview widget happens to be on screen.
+        val width = mCaptureRender?.getRenderWidth() ?: mWidth
+        val height = mCaptureRender?.getRenderHeight() ?: mHeight
 
         var fos: FileOutputStream? = null
         try {
