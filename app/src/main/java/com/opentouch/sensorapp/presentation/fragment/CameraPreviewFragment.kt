@@ -254,6 +254,41 @@ class CameraPreviewFragment : CameraFragment() {
      * the box upright with the flat edge at the bottom.
      */
     override fun getCameraRequest(): CameraRequest {
+        // Make sure the underlying camera's target FPS (setFps(), which
+        // updates CameraUVC's shared MAX_FPS) is in sync with what we
+        // actually intend to request BEFORE this open happens - not just
+        // after, when onCameraState(OPENED) below normally sets it. That
+        // matters for a brand new physical sensor's very first open:
+        // without this, it would open using whatever FPS was left over
+        // from the last sensor that connected (or the library's hardcoded
+        // 30fps default), and for a sensor with a fixed native rate that
+        // doesn't happen to match - GelSight Mini is 25fps, not 30 - the
+        // very first connection attempt requests the wrong exact FPS. It
+        // still connects (via the lenient fallback in CameraUVC's retry
+        // path), but the negotiated stream isn't pinned to the sensor's
+        // rated number, so the live FPS reading can drift instead of
+        // landing cleanly on "25/25" the way DIGIT's "30/30" already does.
+        //
+        // This mirrors the new-sensor default logic in onCameraState()
+        // below (same lastDetectedDeviceKey guard, so it only computes a
+        // fresh default for a genuinely new physical sensor, not on every
+        // resume/reopen of the one already connected), just run a moment
+        // earlier so the very first open already has the right target.
+        val device = getDeviceList()?.firstOrNull()
+        if (device != null && "${device.vendorId}:${device.productId}" != lastDetectedDeviceKey) {
+            val sensor = SupportedSensors.classify(
+                device.vendorId,
+                device.productId,
+                device.productName
+            ).sensor
+            _targetFps.value = sensor?.fpsStops
+                ?.firstOrNull { it == DEFAULT_PREVIEW_FPS }
+                ?: sensor?.fpsStops?.firstOrNull { it > 0 }
+                ?: sensor?.maxFps
+                ?: DEFAULT_PREVIEW_FPS
+        }
+        _targetFps.value?.let { setFps(it) }
+
         // Base (unrotated) size the user picked via the Settings resolution
         // row - see changePreviewResolution(). Falls back to the 320x240
         // default when nothing has been explicitly requested yet. Keep this
