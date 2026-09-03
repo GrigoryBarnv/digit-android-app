@@ -247,7 +247,13 @@ typedef struct uvc_device_info {
   We could/should change this to allow reduce it to, say, 5 by default
   and then allow the user to change the number of buffers as required.
  */
-#define LIBUVC_NUM_TRANSFER_BUFS 10
+/*
+ * Keep enough isochronous requests queued to survive Android scheduling
+ * delays. VGA YUYV uses roughly twice the USB bandwidth of QVGA at 60 fps;
+ * ten buffers can leave the endpoint without a request and lose part of a
+ * frame. Maintained libuvc uses 100 buffers for the same reason.
+ */
+#define LIBUVC_NUM_TRANSFER_BUFS 100
 
 #define LIBUVC_XFER_BUF_SIZE	( 16 * 1024 * 1024 )
 

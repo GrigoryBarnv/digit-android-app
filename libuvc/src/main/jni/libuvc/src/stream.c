@@ -728,12 +728,15 @@ static void _uvc_process_payload(uvc_stream_handle_t *strmh, const uint8_t *payl
 		header_info = payload[1];
 
 		if (UNLIKELY(header_info & UVC_STREAM_ERR)) {
-//			strmh->bfh_err |= UVC_STREAM_ERR;
+			// Do not append data from a payload the device marked as corrupt.
+			// At VGA sizes a single bad payload shifts every following YUYV
+			// pixel and appears as two horizontally displaced images.
+			strmh->bfh_err |= UVC_STREAM_ERR;
 			UVC_DEBUG("bad packet: error bit set");
 			libusb_clear_halt(strmh->devh->usb_devh, strmh->stream_if->bEndpointAddress);
 //			uvc_vc_get_error_code(strmh->devh, &vc_error_code, UVC_GET_CUR);
 			uvc_vs_get_error_code(strmh->devh, &vs_error_code, UVC_GET_CUR);
-//			return;
+			return;
 		}
 
 		if ((strmh->fid != (header_info & UVC_STREAM_FID)) && strmh->got_bytes) {
@@ -770,21 +773,34 @@ static void _uvc_process_payload(uvc_stream_handle_t *strmh, const uint8_t *payl
 	}
 
 	if (LIKELY(data_len > 0)) {
-		if (LIKELY(strmh->got_bytes + data_len < strmh->size_buf)) {
-			memcpy(strmh->outbuf + strmh->got_bytes, payload + header_len, data_len);
-			strmh->got_bytes += data_len;
-		} else {
+		// Raw UVC devices do not always provide a dependable EOF/FID marker.
+		// Never let data from the next image be appended to the current image:
+		// the negotiated maximum is the exact frame size for YUYV streams.
+		const size_t negotiated_frame_size = strmh->cur_ctrl.dwMaxVideoFrameSize;
+		const size_t frame_capacity = negotiated_frame_size && negotiated_frame_size < strmh->size_buf
+			? negotiated_frame_size : strmh->size_buf;
+		if (UNLIKELY(strmh->got_bytes > frame_capacity)) {
 			strmh->bfh_err |= UVC_STREAM_ERR;
+		} else {
+			size_t copy_len = data_len;
+			const size_t remaining = frame_capacity - strmh->got_bytes;
+			if (copy_len > remaining)
+				copy_len = remaining;
+			if (copy_len > 0) {
+				memcpy(strmh->outbuf + strmh->got_bytes, payload + header_len, copy_len);
+				strmh->got_bytes += copy_len;
+			}
 		}
 
-		if (header_info & UVC_STREAM_EOF/*(1 << 1)*/) {
-			// The EOF bit is set, so publish the complete frame
+		if ((negotiated_frame_size && strmh->got_bytes == negotiated_frame_size)
+			|| (header_info & UVC_STREAM_EOF/*(1 << 1)*/)) {
+			// The expected byte count or EOF marks a complete frame.
 			_uvc_swap_buffers(strmh);
 		}
 	}
 }
 
-#if 0
+#if 1
 static inline void _uvc_process_payload_iso(uvc_stream_handle_t *strmh, struct libusb_transfer *transfer) {
 	/* This is an isochronous mode transfer, so each packet has a payload transfer */
 	int packet_id;
@@ -794,6 +810,7 @@ static inline void _uvc_process_payload_iso(uvc_stream_handle_t *strmh, struct l
 		if UNLIKELY(pkt->status) {
 //			UVC_DEBUG("bad packet:status=%d,actual_length=%d", pkt->status, pkt->actual_length);
 			MARK("bad packet:status=%d,actual_length=%d", pkt->status, pkt->actual_length);
+			strmh->bfh_err |= UVC_STREAM_ERR;
 			continue;
 		}
 		if UNLIKELY(!pkt->actual_length) {
@@ -802,7 +819,11 @@ static inline void _uvc_process_payload_iso(uvc_stream_handle_t *strmh, struct l
 		}
 		// libusb_get_iso_packet_buffer_simple will return NULL
 		uint8_t *pktbuf = libusb_get_iso_packet_buffer_simple(transfer, packet_id);
-		_uvc_process_payload(strmh, pktbuf, pkt->actual_length);
+		if (LIKELY(pktbuf)) {
+			_uvc_process_payload(strmh, pktbuf, pkt->actual_length);
+		} else {
+			strmh->bfh_err |= UVC_STREAM_ERR;
+		}
 	}
 }
 #else
@@ -866,9 +887,14 @@ static inline void _uvc_process_payload_iso(uvc_stream_handle_t *strmh, struct l
 			}
 
 			if (LIKELY(check_header)) {
+				if (UNLIKELY(header_len < 2 || header_len > pkt->actual_length)) {
+					strmh->bfh_err |= UVC_STREAM_ERR;
+					MARK("bogus packet: actual_len=%d, header_len=%zd", pkt->actual_length, header_len);
+					continue;
+				}
 				header_info = pktbuf[1];
 				if (UNLIKELY(header_info & UVC_STREAM_ERR)) {
-//					strmh->bfh_err |= UVC_STREAM_ERR;
+					strmh->bfh_err |= UVC_STREAM_ERR;
 					MARK("bad packet:status=0x%2x", header_info);
 					libusb_clear_halt(strmh->devh->usb_devh, strmh->stream_if->bEndpointAddress);
 //					uvc_vc_get_error_code(strmh->devh, &vc_error_code, UVC_GET_CUR);
@@ -933,14 +959,16 @@ static inline void _uvc_process_payload_iso(uvc_stream_handle_t *strmh, struct l
 			// from "if (pkt->actual_length - header_len > 0)"
 			if (LIKELY(pkt->actual_length > header_len)) {
 				const size_t odd_bytes = pkt->actual_length - header_len;
-				assert(strmh->got_bytes + odd_bytes < strmh->size_buf);
-				assert(strmh->outbuf);
-				assert(pktbuf);
-				memcpy(strmh->outbuf + strmh->got_bytes, pktbuf + header_len, odd_bytes);
-				strmh->got_bytes += odd_bytes;
+				if (LIKELY(strmh->got_bytes <= strmh->size_buf
+					&& odd_bytes <= strmh->size_buf - strmh->got_bytes)) {
+					memcpy(strmh->outbuf + strmh->got_bytes, pktbuf + header_len, odd_bytes);
+					strmh->got_bytes += odd_bytes;
+				} else {
+					strmh->bfh_err |= UVC_STREAM_ERR;
+				}
 			}
 #ifdef USE_EOF
-			if ((pktbuf[1] & UVC_STREAM_EOF) && strmh->got_bytes != 0) {
+			if (check_header && (header_info & UVC_STREAM_EOF) && strmh->got_bytes != 0) {
 				/* The EOF bit is set, so publish the complete frame */
 				_uvc_swap_buffers(strmh);
 			}
@@ -1516,6 +1544,22 @@ uvc_error_t uvc_stream_start_bandwidth(uvc_stream_handle_t *strmh,
 					/* But keep a reasonable limit: Otherwise we start dropping data */
 					if (packets_per_transfer > 32)
 						packets_per_transfer = 32;
+
+#ifdef __ANDROID__
+					/*
+					 * Android usbfs splits an isochronous request above 32 KiB into
+					 * several independently completed kernel URBs. Keep every libusb
+					 * transfer in one URB so packet order and frame assembly cannot be
+					 * affected by those partial completions. The larger transfer queue
+					 * in libuvc_internal.h preserves the same scheduling headroom.
+					 */
+					const size_t max_packets_per_android_urb =
+						(32U * 1024U) / endpoint_bytes_per_packet;
+					if (max_packets_per_android_urb > 0
+						&& packets_per_transfer > max_packets_per_android_urb) {
+						packets_per_transfer = max_packets_per_android_urb;
+					}
+#endif
 
 					total_transfer_size = packets_per_transfer * endpoint_bytes_per_packet;
 					break;

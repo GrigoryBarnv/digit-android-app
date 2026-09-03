@@ -2721,6 +2721,7 @@ static int handle_iso_completion(struct libusb_device_handle *handle,	// XXX add
 	struct android_transfer_priv *tpriv = usbi_transfer_get_os_priv(itransfer);
 	int num_urbs = tpriv->num_urbs;
 	int urb_idx = 0;
+	int packet_offset = 0;
 	int i;
 	enum libusb_transfer_status status = LIBUSB_TRANSFER_COMPLETED;
 
@@ -2746,11 +2747,27 @@ static int handle_iso_completion(struct libusb_device_handle *handle,	// XXX add
 		urb->status, urb_idx, num_urbs);
 
 	/* copy isochronous results back in */
+	/*
+	 * URBs are allowed to complete out of submission order. The old Android
+	 * backend used one monotonically increasing packet offset, so a later URB
+	 * completing first wrote its packet lengths/statuses into the earlier
+	 * slots. At high-bandwidth VGA modes that reorders chunks of YUYV data and
+	 * appears as moving vertical bands or two/three copies of the image.
+	 * Derive the destination offset from this URB's submitted position instead.
+	 */
+	for (i = 0; i < urb_idx - 1; i++) {
+		if (LIKELY(tpriv->iso_urbs[i]))
+			packet_offset += tpriv->iso_urbs[i]->number_of_packets;
+	}
 
 	for (i = 0; i < urb->number_of_packets; i++) {
 		struct usbfs_iso_packet_desc *urb_desc = &urb->iso_frame_desc[i];
+		if (UNLIKELY(packet_offset + i >= transfer->num_iso_packets)) {
+			status = LIBUSB_TRANSFER_ERROR;
+			break;
+		}
 		struct libusb_iso_packet_descriptor *lib_desc =
-				&transfer->iso_packet_desc[tpriv->iso_packet_offset++];
+				&transfer->iso_packet_desc[packet_offset + i];
 		lib_desc->status = LIBUSB_TRANSFER_COMPLETED;
 		switch (urb_desc->status) {
 		case 0:
@@ -2827,9 +2844,9 @@ static int handle_iso_completion(struct libusb_device_handle *handle,	// XXX add
 		break;
 	}
 
-	/* if we're the last urb then we're done */
-	if (urb_idx == num_urbs) {
-		usbi_dbg("last URB in transfer --> complete!");
+	/* Completion order is not guaranteed; all submitted URBs must be reaped. */
+	if (tpriv->num_retired == num_urbs) {
+		usbi_dbg("all URBs in transfer reaped --> complete!");
 		free_iso_urbs(tpriv);
 		usbi_mutex_unlock(&itransfer->lock);
 		return usbi_handle_transfer_completion(itransfer, status);

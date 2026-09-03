@@ -408,7 +408,10 @@ void UVCPreview::uvc_preview_frame_callback(uvc_frame_t *frame, void *vptr_args)
 	UVCPreview *preview = reinterpret_cast<UVCPreview *>(vptr_args);
 	if UNLIKELY(!preview->isRunning() || !frame || !frame->frame_format || !frame->data || !frame->data_bytes) return;
 	if (UNLIKELY(
-		((frame->frame_format != UVC_FRAME_FORMAT_MJPEG) && (frame->actual_bytes < preview->frameBytes))
+		// Raw YUYV has a fixed byte count. Accepting an oversized frame can
+		// include bytes from a repeated/misaligned USB payload and shifts all
+		// later pixels, which is visible as a split VGA preview.
+		((frame->frame_format != UVC_FRAME_FORMAT_MJPEG) && (frame->actual_bytes != preview->frameBytes))
 		|| (frame->width != preview->frameWidth) || (frame->height != preview->frameHeight) )) {
 
 #if LOCAL_DEBUG
