@@ -30,11 +30,47 @@ trained model is exported to the portable ONNX format by
 `model_key_finger/export_model.py` so it can run directly on Android without
 a server.
 
-The Android app bundles these files in `app/src/main/assets/models/`:
+The Android app does not bundle model files in the APK. At runtime it creates
+an app-owned model directory at:
+
+```text
+Android/data/com.opentouch.sensorapp/files/models/
+```
+
+The AI menu's **Import model files** action copies selected files into that
+directory. Each ONNX model needs a matching JSON configuration file with the
+same base name, for example:
 
 - `key_finger.onnx` - trained two-class model
-- `labels.txt` - output labels: `key` and `finger`
-- `model_config.json` - input size and RGB normalization settings
+- `key_finger.json` - input size, RGB normalization, and output labels
+
+The key/finger JSON configuration is generated beside the model when the
+model is imported. Downloaded models can use the same directory and naming
+convention. This keeps large model files independent from APK releases and
+avoids storage permissions because the directory is app-owned.
+
+For a more comfortable one-download flow, package the files as
+`<model-name>.opentouchmodel`. This is a ZIP-based OpenTouch package containing
+`model.onnx` and, for models other than key/finger, `model.json`. The app is
+registered as an Android file handler for this extension, so tapping the
+download can open OpenTouch and extract the files automatically. Create a
+package with:
+
+```powershell
+.\tools\package-opentouch-model.ps1 `
+  -ModelPath .\model_key_finger\output\key_finger.onnx `
+  -ConfigPath .\path\to\key_finger.json
+```
+
+For `key_finger.onnx`, `-ConfigPath` can be omitted because the app generates
+the known key/finger configuration automatically.
+
+ONNX Runtime is delivered separately in the `mlruntime` dynamic feature
+module. The app requests this signed module on first launch; Google Play
+downloads it once and keeps it installed for later launches. This requires
+publishing and installing the app as an Android App Bundle. A standalone APK
+installed outside Google Play cannot download an on-demand Play feature, so
+the AI action remains unavailable in that case.
 
 When the user captures an image and selects Analyze, `ModelRunner.kt` resizes
 and normalizes the image, runs it with ONNX Runtime, and displays the class
@@ -73,6 +109,13 @@ To build a release APK locally:
 
 ```powershell
 .\gradlew.bat :app:assembleRelease
+```
+
+For the Play Store build, use an Android App Bundle so the on-demand ML
+feature is included in the published package:
+
+```powershell
+.\gradlew.bat bundleRelease
 ```
 
 ## CI And Releases

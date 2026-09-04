@@ -5,6 +5,7 @@ plugins {
 
 android {
     namespace = "com.opentouch.sensorapp"
+    dynamicFeatures += setOf(":mlruntime")
     ndkVersion = "27.0.12077973"
     compileSdk {
         version = release(36) {
@@ -16,8 +17,8 @@ android {
         applicationId = "com.opentouch.sensorapp"
         minSdk = 24
         targetSdk = 36
-        versionCode = 12
-        versionName = "1.1.12"
+        versionCode = 13
+        versionName = "1.1.13"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -77,8 +78,12 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation("androidx.compose.material:material-icons-extended")
     implementation(project(":libausbc"))
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.23.2")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
+    implementation("com.google.android.play:feature-delivery:2.1.0")
+    // Local debug builds run AI directly so Android Studio testing does not
+    // require a Play-distributed dynamic feature. Release keeps this out of
+    // the base APK and receives it through :mlruntime instead.
+    debugImplementation("com.microsoft.onnxruntime:onnxruntime-android:1.23.2")
     // Lets MainActivity call installSplashScreen() and take explicit control
     // of the system's mandatory cold-start icon screen (dismiss it the instant
     // the app's first frame is ready), instead of relying on whatever timing

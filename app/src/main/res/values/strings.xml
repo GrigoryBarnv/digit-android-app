@@ -11,4 +11,5 @@
     <string name="permission_denied_retry">Access denied. Want to reconnect?</string>
     <string name="permission_no_response_retry">No response. Want to reconnect?</string>
     <string name="camera_error">Camera error: %1$s</string>
+    <string name="ml_runtime_feature_name">AI model support</string>
 </resources>

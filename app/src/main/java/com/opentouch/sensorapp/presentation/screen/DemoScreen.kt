@@ -8,6 +8,7 @@ import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
 import android.view.View
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
@@ -80,6 +81,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -115,7 +117,12 @@ import com.opentouch.sensorapp.R
 import com.opentouch.sensorapp.data.ResolutionFpsOption
 import com.opentouch.sensorapp.data.SupportedSensors
 import com.opentouch.sensorapp.ml.ModelPrediction
+import com.opentouch.sensorapp.ml.ModelRepository
 import com.opentouch.sensorapp.ml.ModelRunner
+import com.opentouch.sensorapp.ml.ModelRuntimeLoader
+import com.opentouch.sensorapp.ml.MlRuntimeInstaller
+import com.opentouch.sensorapp.ml.MlRuntimeState
+import com.opentouch.sensorapp.ml.StoredModel
 import com.opentouch.sensorapp.presentation.component.RgbControls
 import com.opentouch.sensorapp.presentation.component.SensorPreviewShape
 import com.opentouch.sensorapp.presentation.fragment.CameraPreviewFragment
@@ -338,7 +345,10 @@ private fun ResolutionChipRow(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DemoScreen() {
+fun DemoScreen(
+    incomingModelUri: Uri? = null,
+    onIncomingModelHandled: () -> Unit = {}
+) {
     val red = remember { mutableFloatStateOf(0f) }
     val green = remember { mutableFloatStateOf(0f) }
     val blue = remember { mutableFloatStateOf(0f) }
@@ -368,20 +378,95 @@ fun DemoScreen() {
     var isVideoMode by remember { mutableStateOf(false) }
 
     // ── AI model selection ────────────────────────────────────────────────────
-    var selectedModel by remember { mutableStateOf("None") }
+    var availableModels by remember { mutableStateOf<List<StoredModel>>(emptyList()) }
+    var selectedModel by remember { mutableStateOf<StoredModel?>(null) }
     var showModelMenu by remember { mutableStateOf(false) }
     var analysisResult by remember { mutableStateOf<ModelPrediction?>(null) }
     var analysisError by remember { mutableStateOf<String?>(null) }
     var analysisBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var isAnalyzing by remember { mutableStateOf(false) }
     var modelRunner by remember { mutableStateOf<ModelRunner?>(null) }
+    var modelLoadError by remember { mutableStateOf<String?>(null) }
+    val debugRuntimeBundled = remember { ModelRuntimeLoader.isDebugRuntimeBundled() }
+    var mlRuntimeState by remember {
+        mutableStateOf(
+            if (debugRuntimeBundled) MlRuntimeState.READY else MlRuntimeState.DOWNLOADING
+        )
+    }
     val analysisScope = rememberCoroutineScope()
 
+    DisposableEffect(context) {
+        if (debugRuntimeBundled) {
+            onDispose { }
+        } else {
+            val installer = MlRuntimeInstaller(context) { state -> mlRuntimeState = state }
+            installer.start()
+            onDispose { installer.close() }
+        }
+    }
     LaunchedEffect(Unit) {
-        modelRunner = withContext(Dispatchers.IO) { ModelRunner(context) }
+        availableModels = withContext(Dispatchers.IO) { ModelRepository.listModels(context) }
+    }
+    LaunchedEffect(incomingModelUri) {
+        val uri = incomingModelUri ?: return@LaunchedEffect
+        try {
+            withContext(Dispatchers.IO) {
+                ModelRepository.importFile(context, uri)
+            }
+            availableModels = withContext(Dispatchers.IO) {
+                ModelRepository.listModels(context)
+            }
+            Toast.makeText(context, "ONNX model imported", Toast.LENGTH_SHORT).show()
+        } catch (error: Exception) {
+            Toast.makeText(
+                context,
+                error.message ?: "Could not import ONNX model",
+                Toast.LENGTH_LONG
+            ).show()
+        } finally {
+            onIncomingModelHandled()
+        }
+    }
+    LaunchedEffect(selectedModel, mlRuntimeState) {
+        modelRunner?.close()
+        modelRunner = null
+        modelLoadError = null
+        if (mlRuntimeState != MlRuntimeState.READY) return@LaunchedEffect
+        val model = selectedModel ?: return@LaunchedEffect
+        try {
+            modelRunner = withContext(Dispatchers.IO) {
+                ModelRuntimeLoader.create(model.modelFile, model.configFile)
+            }
+        } catch (error: Exception) {
+            modelLoadError = error.message ?: "Could not load model"
+        }
     }
     DisposableEffect(Unit) {
         onDispose { modelRunner?.close() }
+    }
+
+    val importModelLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            analysisScope.launch {
+                try {
+                    withContext(Dispatchers.IO) {
+                        uris.forEach { ModelRepository.importFile(context, it) }
+                    }
+                    availableModels = withContext(Dispatchers.IO) {
+                        ModelRepository.listModels(context)
+                    }
+                    Toast.makeText(context, "Model files imported", Toast.LENGTH_SHORT).show()
+                } catch (error: Exception) {
+                    Toast.makeText(
+                        context,
+                        error.message ?: "Could not import model files",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
     }
 
     // ── Settings menu (FPS / RGB / Resolution) ────────────────────────────────
@@ -464,7 +549,7 @@ fun DemoScreen() {
 
     // ── Capture button handler ────────────────────────────────────────────────
     fun onCaptureClicked() {
-        if (selectedModel != "None") {
+        if (selectedModel != null) {
             if (isCapturing || isAnalyzing) return
             if (isVideoMode) isVideoMode = false
             isCapturing = true
@@ -548,7 +633,12 @@ fun DemoScreen() {
         val bitmap = analysisBitmap ?: return
         val runner = modelRunner
         if (runner == null) {
-            analysisError = "AI model is still loading"
+            analysisError = modelLoadError ?: when (mlRuntimeState) {
+                MlRuntimeState.DOWNLOADING -> "AI runtime is still downloading"
+                MlRuntimeState.UNAVAILABLE,
+                MlRuntimeState.FAILED -> "AI runtime is unavailable"
+                MlRuntimeState.READY -> "AI model is still loading"
+            }
             return
         }
         isAnalyzing = true
@@ -556,7 +646,7 @@ fun DemoScreen() {
         analysisScope.launch {
             val result = withContext(Dispatchers.Default) { runner.run(bitmap) }
             isAnalyzing = false
-            if (selectedModel != "None") analysisResult = result
+            if (selectedModel != null) analysisResult = result
         }
     }
 
@@ -861,7 +951,7 @@ fun DemoScreen() {
                         // installed model. Keep the button label stable so the
                         // bottom navigation never changes width.
                         label = "AI",
-                        selected = selectedModel != "None",
+                        selected = selectedModel != null,
                         restSize = navRestSize,
                         selectedSize = navSelectedSize,
                         iconSize = navIconSize,
@@ -878,7 +968,7 @@ fun DemoScreen() {
                         DropdownMenuItem(
                             text = { Text("None", color = Color.White) },
                             onClick = {
-                                selectedModel = "None"
+                                selectedModel = null
                                 analysisBitmap = null
                                 analysisResult = null
                                 analysisError = null
@@ -886,27 +976,50 @@ fun DemoScreen() {
                                 showModelMenu = false
                             }
                         )
-                        DropdownMenuItem(
-                            text = { Text("Key / Finger", color = Color.White) },
-                            onClick = {
-                                selectedModel = "Key / Finger"
-                                isVideoMode = false
-                                analysisResult = null
-                                analysisError = null
-                                showModelMenu = false
-                            }
-                        )
+                        if (mlRuntimeState != MlRuntimeState.READY) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        when (mlRuntimeState) {
+                                            MlRuntimeState.DOWNLOADING -> "Downloading AI runtime..."
+                                            MlRuntimeState.UNAVAILABLE -> "AI runtime unavailable"
+                                            MlRuntimeState.FAILED -> "AI runtime download failed"
+                                            MlRuntimeState.READY -> "AI runtime ready"
+                                        },
+                                        color = Color.LightGray
+                                    )
+                                },
+                                enabled = false,
+                                onClick = {}
+                            )
+                        }
+                        availableModels.forEach { model ->
+                            DropdownMenuItem(
+                                text = { Text(model.displayName, color = Color.White) },
+                                enabled = mlRuntimeState == MlRuntimeState.READY,
+                                onClick = {
+                                    selectedModel = model
+                                    isVideoMode = false
+                                    analysisResult = null
+                                    analysisError = null
+                                    showModelMenu = false
+                                }
+                            )
+                        }
+                        if (availableModels.isEmpty()) {
+                            DropdownMenuItem(
+                                text = { Text("No models installed", color = Color.LightGray) },
+                                enabled = false,
+                                onClick = {}
+                            )
+                        }
                         HorizontalDivider(color = Color(0xFF3D3D3D))
-                        // Placeholder entry for the generalized model-loading
-                        // feature (drop in any .onnx file with its own
-                        // labels/config) - not wired up yet, just reserves the
-                        // spot in the menu.
                         DropdownMenuItem(
-                            text = { Text("Add model", color = Color.White) },
+                            text = { Text("Import model files", color = Color.White) },
                             leadingIcon = { Icon(Icons.Filled.Add, contentDescription = null, tint = Color.White) },
                             onClick = {
                                 showModelMenu = false
-                                Toast.makeText(context, "Add model - coming soon", Toast.LENGTH_SHORT).show()
+                                importModelLauncher.launch(arrayOf("*/*"))
                             }
                         )
                     }
@@ -1138,7 +1251,7 @@ fun DemoScreen() {
                 val ringGapSize = captureSize * 0.86f
                 val discSize = captureSize * 0.66f
 
-                if (selectedModel == "None" || analysisBitmap == null) {
+                if (selectedModel == null || analysisBitmap == null) {
                     Box(
                         modifier = Modifier.size(captureSize),
                         contentAlignment = Alignment.Center
@@ -1193,7 +1306,7 @@ fun DemoScreen() {
                     Spacer(modifier = Modifier.size(captureSize))
                 }
 
-                if (selectedModel != "None") {
+                if (selectedModel != null) {
                     // These actions share the shutter row. Their quarter-width
                     // slots line up with Gallery and Settings without adding a
                     // second row or pushing the preview upward.
@@ -1235,7 +1348,7 @@ fun DemoScreen() {
                     }
                 }
 
-                if (selectedModel != "None" && (isAnalyzing || analysisResult != null || analysisError != null)) {
+                if (selectedModel != null && (isAnalyzing || analysisResult != null || analysisError != null)) {
                     Surface(
                         modifier = Modifier
                             .align(Alignment.Center)

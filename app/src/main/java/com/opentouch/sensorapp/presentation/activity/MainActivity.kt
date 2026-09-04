@@ -1,6 +1,8 @@
 package com.opentouch.sensorapp.presentation.activity
 
 import android.Manifest
+import android.content.Intent
+import android.net.Uri
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.WindowManager
@@ -19,6 +21,8 @@ import com.opentouch.sensorapp.presentation.screen.SplashScreen
 import kotlinx.coroutines.delay
 
 class MainActivity : FragmentActivity() {
+    private var incomingModelUri by mutableStateOf<Uri?>(null)
+
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
             // Camera fragment handles USB permission retries after runtime permission changes.
@@ -43,6 +47,7 @@ class MainActivity : FragmentActivity() {
         // hand off to each other plainly instead.
         installSplashScreen()
         super.onCreate(savedInstanceState)
+        incomingModelUri = modelUriFromIntent(intent)
         // Keep the screen on for as long as the app is in the foreground -
         // Roberto reported the screen timing out and turning off mid-use
         // (v1.1.7 feedback). Cleared automatically once the app is closed
@@ -65,8 +70,29 @@ class MainActivity : FragmentActivity() {
             if (showSplash) {
                 SplashScreen()
             } else {
-                MainScreen()
+                MainScreen(
+                    incomingModelUri = incomingModelUri,
+                    onIncomingModelHandled = { incomingModelUri = null }
+                )
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        incomingModelUri = modelUriFromIntent(intent)
+    }
+
+    private fun modelUriFromIntent(intent: Intent?): Uri? {
+        if (intent == null) return null
+        return when (intent.action) {
+            Intent.ACTION_VIEW -> intent.data
+            Intent.ACTION_SEND -> {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri
+            }
+            else -> null
         }
     }
 

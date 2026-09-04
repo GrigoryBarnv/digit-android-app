@@ -49,11 +49,67 @@
         <activity
             android:name=".presentation.activity.MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"
             android:theme="@style/Theme.Digitapp.Starting">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Lets download/file-manager apps offer OpenTouch for ONNX files. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="application/onnx" />
+                <data android:mimeType="application/x-onnx" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/onnx" />
+                <data android:mimeType="application/x-onnx" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
+            <!-- Single-file OpenTouch model packages contain the ONNX model and
+                 its JSON configuration together. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:mimeType="application/vnd.opentouch.model" />
+                <data
+                    android:mimeType="application/octet-stream"
+                    android:pathPattern=".*\\.opentouchmodel" />
+            </intent-filter>
+            <!-- Some download providers report only */* instead of the custom
+                 MIME type. Match the filename for both URI schemes as well. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="content"
+                    android:mimeType="*/*"
+                    android:pathPattern=".*\\.opentouchmodel" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="file"
+                    android:mimeType="*/*"
+                    android:pathPattern=".*\\.opentouchmodel" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/vnd.opentouch.model" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
             </intent-filter>
         </activity>
     </application>
