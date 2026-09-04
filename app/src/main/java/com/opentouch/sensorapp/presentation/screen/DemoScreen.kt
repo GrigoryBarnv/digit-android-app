@@ -45,11 +45,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PhotoLibrary
@@ -100,6 +101,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
@@ -594,13 +596,21 @@ fun DemoScreen() {
                     fontSize = 18.sp,
                     fontWeight = FontWeight.SemiBold
                 )
+                // "Info" reads more clearly as "tap for details about this
+                // app" than the previous people/group icon, which looked
+                // more like a contacts or multi-user feature. The subtle
+                // translucent circle behind it gives the button a visible
+                // tap target/affordance instead of a bare icon floating in
+                // the corner.
                 IconButton(
                     onClick = { showCreditsDialog = true },
-                    modifier = Modifier.align(Alignment.CenterEnd)
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .background(Color.White.copy(alpha = 0.12f), CircleShape)
                 ) {
                     Icon(
-                        Icons.Filled.Group,
-                        contentDescription = "Credits",
+                        Icons.Filled.Info,
+                        contentDescription = "About OpenTouch and credits",
                         tint = Color.White
                     )
                 }
@@ -1568,13 +1578,25 @@ fun DemoScreen() {
                                 .padding(bottom = 4.dp)
                         )
 
-                        listOf("Nasima Mallick", "Grigory Baranov", "Gayathri Kakarla").forEach { name ->
+                        // Name + LinkedIn URL pairs. Tapping a row opens that
+                        // person's profile - the trailing "open in new" icon
+                        // signals it's a link rather than a plain label.
+                        listOf(
+                            "Nasima Mallick" to "https://www.linkedin.com/in/nasima-mallick-110351211/",
+                            "Grigory Baranov" to "https://www.linkedin.com/in/grigory-baranov/",
+                            "Gayathri Kakarla" to "https://www.linkedin.com/in/gayathri-kakarla/"
+                        ).forEach { (name, linkedInUrl) ->
                             val initials = name.split(" ")
                                 .mapNotNull { it.firstOrNull()?.toString() }
                                 .joinToString("")
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .clickable {
+                                        context.startActivity(
+                                            Intent(Intent.ACTION_VIEW, Uri.parse(linkedInUrl))
+                                        )
+                                    }
                                     .padding(vertical = 7.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(14.dp)
@@ -1592,16 +1614,87 @@ fun DemoScreen() {
                                         fontWeight = FontWeight.SemiBold
                                     )
                                 }
-                                Text(name, color = Color.White, fontSize = 15.sp)
+                                Text(
+                                    name,
+                                    color = Color.White,
+                                    fontSize = 15.sp,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Icon(
+                                    Icons.Filled.OpenInNew,
+                                    contentDescription = "Opens LinkedIn profile",
+                                    tint = Color(0xFF9A9A9A),
+                                    modifier = Modifier.size(16.dp)
+                                )
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
+                        HorizontalDivider(color = Color(0xFF3D3D3D))
+                        Spacer(modifier = Modifier.height(14.dp))
 
+                        // ── Project website ─────────────────────────────────
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    context.startActivity(
+                                        Intent(
+                                            Intent.ACTION_VIEW,
+                                            Uri.parse("https://lasr-lab.github.io/opentouch.org/webpage/")
+                                        )
+                                    )
+                                }
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                Icons.Filled.Language,
+                                contentDescription = null,
+                                tint = lilac,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                "Visit our website",
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Icon(
+                                Icons.Filled.OpenInNew,
+                                contentDescription = "Opens project website",
+                                tint = Color(0xFF9A9A9A),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Underlined to read clearly as a link, not just a
+                        // muted caption, now that it opens lasr.org.
                         Text(
                             "LASR Lab · TU Dresden",
                             color = Color(0xFF9A9A9A),
                             fontSize = 12.sp,
+                            textDecoration = TextDecoration.Underline,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    context.startActivity(
+                                        Intent(Intent.ACTION_VIEW, Uri.parse("https://lasr.org/"))
+                                    )
+                                }
+                                .padding(vertical = 4.dp),
+                            textAlign = TextAlign.Center
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Text(
+                            "© 2026 OpenTouch",
+                            color = Color(0xFF6E6E6E),
+                            fontSize = 11.sp,
                             modifier = Modifier.fillMaxWidth(),
                             textAlign = TextAlign.Center
                         )
