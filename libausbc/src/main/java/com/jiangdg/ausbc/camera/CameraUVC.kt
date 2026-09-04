@@ -254,19 +254,44 @@ class CameraUVC(ctx: Context, device: UsbDevice) : MultiCameraClient.ICamera(ctx
                     Logger.e(TAG, "open camera failed, preview size($previewSize) unsupported-> ${mUvcCamera?.supportedSizeList}")
                     return
                 }
-                Logger.e(TAG, " setPreviewSize failed(format is $previewFormat), try to use other format...")
-                mUvcCamera?.setPreviewSize(
-                    previewSize.width,
-                    previewSize.height,
-                    MAX_FPS,
-                    MAX_FPS,
-                    if (previewFormat == UVCCamera.FRAME_FORMAT_YUYV) {
-                        UVCCamera.FRAME_FORMAT_MJPEG
-                    } else {
-                        UVCCamera.FRAME_FORMAT_YUYV
-                    },
-                    UVCCamera.DEFAULT_BANDWIDTH
-                )
+                Logger.e(TAG, " setPreviewSize failed(format is $previewFormat), retrying with a lenient fps range before switching format...")
+                try {
+                    // Retry the SAME format the app already resolved as
+                    // correct for this device (see mResolvedFrameFormat) but
+                    // with a lenient fps range instead of an exact match.
+                    // This is what actually made GelSight Mini work
+                    // originally - its ~25fps MJPEG-only descriptor almost
+                    // never equals whatever fps was last selected (MAX_FPS
+                    // is shared/mutable across sensors), so requiring an
+                    // exact match here made even this retry fail, showing
+                    // "Camera disconnected" despite the sensor being
+                    // correctly detected and its format correctly resolved.
+                    mUvcCamera?.setPreviewSize(
+                        previewSize.width,
+                        previewSize.height,
+                        MIN_FS,
+                        MAX_FPS,
+                        previewFormat,
+                        UVCCamera.DEFAULT_BANDWIDTH
+                    )
+                } catch (e2: Exception) {
+                    // Last resort: the resolved format itself may be wrong
+                    // for this device (rare, since getAllPreviewSizes()
+                    // already resolves it upfront) - try the other one.
+                    Logger.e(TAG, " retry with resolved format ($previewFormat) failed too, try the other format...")
+                    mUvcCamera?.setPreviewSize(
+                        previewSize.width,
+                        previewSize.height,
+                        MIN_FS,
+                        MAX_FPS,
+                        if (previewFormat == UVCCamera.FRAME_FORMAT_YUYV) {
+                            UVCCamera.FRAME_FORMAT_MJPEG
+                        } else {
+                            UVCCamera.FRAME_FORMAT_YUYV
+                        },
+                        UVCCamera.DEFAULT_BANDWIDTH
+                    )
+                }
             } catch (e: Exception) {
                 closeCamera()
                 postStateEvent(ICameraStateCallBack.State.ERROR, "err: ${e.localizedMessage}")

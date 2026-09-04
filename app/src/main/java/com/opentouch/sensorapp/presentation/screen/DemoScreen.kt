@@ -39,10 +39,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Info
@@ -91,7 +93,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
@@ -340,6 +344,13 @@ fun DemoScreen() {
     val blue = remember { mutableFloatStateOf(0f) }
     var showRgbControls by remember { mutableStateOf(false) }
     var showFpsControls by remember { mutableStateOf(false) }
+    // Actual measured height of the bottom nav bar, so the RGB/FPS overlay
+    // panels can sit just above it on any screen size instead of guessing a
+    // fixed dp clearance - the bar's own size is responsive (scales with
+    // screen width), so a hardcoded offset would overlap it on a tablet or
+    // leave a gap on a small phone.
+    var bottomBarHeight by remember { mutableStateOf(0.dp) }
+    val density = LocalDensity.current
     val fpsSlider = remember { mutableFloatStateOf(0f) }
     // Resolution chosen in the FPS panel's resolution row - null means "no
     // explicit choice yet this session", in which case the panel falls back
@@ -708,14 +719,32 @@ fun DemoScreen() {
             // the reserved size makes the whole bottom control area reflow.
             val navSelectedSize = navRestSize
             val navIconSize = navRestSize * 0.4f
-            val settingsMenuOffsetX = (maxWidth * 0.09f).coerceIn(16.dp, 100.dp)
-            // Unlike the size/Settings-offset values above, this correction is
-            // NOT proportional to screen width - it exists because the AI
-            // popup's fixed-width content (None/Model 1/Model 2) doesn't fit
-            // past the anchor on a narrow phone, forcing Compose to clamp it
-            // left. A tablet has plenty of room there already, so this stays
-            // capped close to the phone-tuned value instead of scaling up.
-            val aiMenuOffsetX = -(maxWidth * 0.074f).coerceIn(8.dp, 28.dp)
+            // Label text boxes scale the same way as the circles above, so a
+            // label isn't clipped on a narrow phone or left looking cramped
+            // on a tablet. The "wide" variant is for labels longer than the
+            // usual single word (e.g. "New image").
+            val navLabelWidth = (maxWidth * 0.185f).coerceIn(58.dp, 92.dp)
+            val navLabelWidthWide = (maxWidth * 0.24f).coerceIn(76.dp, 120.dp)
+            // The AI menu is short (None / Key-Finger / Add model), so it
+            // gets its own, narrower scaled width rather than reusing the
+            // wider Settings one. Giving the menu a known, exact width (not
+            // just a max) lets the x offset below be calculated precisely -
+            // half the difference between the button's width and the menu's
+            // width - instead of a hand-tuned constant that only happened to
+            // look right on one screen size.
+            val navAiMenuWidth = (maxWidth * 0.42f).coerceIn(150.dp, 190.dp)
+            val navAiMenuOffsetX = (navLabelWidth - navAiMenuWidth) / 2
+            // The Settings menu is anchored to the Settings button itself
+            // (the last, rightmost button), so it always opens leftward
+            // from that button's right edge. If the menu's content is wider
+            // than the space between the button and the screen's left edge,
+            // Compose falls back to pinning the menu flush against the
+            // screen edge instead - no longer aligned with the button at
+            // all, which is worse the narrower the screen is. Capping the
+            // menu's width to a scaled fraction of the available width
+            // keeps it comfortably inside that space on any screen size, so
+            // it reliably opens above the button rather than the fallback.
+            val navMenuMaxWidth = (maxWidth * 0.62f).coerceIn(200.dp, 260.dp)
             val captureSize = (maxWidth * 0.18f).coerceIn(56.dp, 96.dp)
             // Reserve enough height for either the shutter or the circular AI
             // actions. This keeps the panel and weighted preview identical in
@@ -727,6 +756,9 @@ fun DemoScreen() {
                     .fillMaxWidth()
                     .background(Color(0xFF2C2D33), RoundedCornerShape(14.dp))
                     .padding(horizontal = 12.dp, vertical = 14.dp)
+                    .onGloballyPositioned { coords ->
+                        bottomBarHeight = with(density) { coords.size.height.toDp() }
+                    }
             ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -742,6 +774,7 @@ fun DemoScreen() {
                     restSize = navRestSize,
                     selectedSize = navSelectedSize,
                     iconSize = navIconSize,
+                    labelWidth = navLabelWidth,
                     onClick = {
                         val pm = context.packageManager
                         val seen = mutableSetOf<String>()
@@ -807,11 +840,21 @@ fun DemoScreen() {
                     restSize = navRestSize,
                     selectedSize = navSelectedSize,
                     iconSize = navIconSize,
+                    labelWidth = navLabelWidth,
                     onClick = { if (!isRecording) isVideoMode = !isVideoMode }
                 )
 
                 // AI button
-                Box(modifier = Modifier.weight(1f)) {
+                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                    // Wrap the button and its menu together, sized to just the
+                    // button's own footprint (not the full quarter-width slot
+                    // this sits in). The DropdownMenu anchors to whatever Box
+                    // directly contains it, so anchoring it here - already
+                    // centered in the slot by the outer Box above - keeps the
+                    // popup aligned under the actual button on any screen
+                    // width, instead of a fixed offset that only worked for
+                    // one specific slot width.
+                    Box {
                     CircularNavButton(
                         icon = Icons.Filled.Memory,
                         // The model has two output classes, but it is one
@@ -822,13 +865,15 @@ fun DemoScreen() {
                         restSize = navRestSize,
                         selectedSize = navSelectedSize,
                         iconSize = navIconSize,
+                        labelWidth = navLabelWidth,
                         onClick = { showModelMenu = true }
                     )
                     DropdownMenu(
                         expanded = showModelMenu,
                         onDismissRequest = { showModelMenu = false },
+                        modifier = Modifier.width(navAiMenuWidth),
                         containerColor = Color(0xFF2D2D2D),
-                        offset = DpOffset(x = aiMenuOffsetX, y = (-5).dp)
+                        offset = DpOffset(x = navAiMenuOffsetX, y = (-5).dp)
                     ) {
                         DropdownMenuItem(
                             text = { Text("None", color = Color.White) },
@@ -851,12 +896,34 @@ fun DemoScreen() {
                                 showModelMenu = false
                             }
                         )
+                        HorizontalDivider(color = Color(0xFF3D3D3D))
+                        // Placeholder entry for the generalized model-loading
+                        // feature (drop in any .onnx file with its own
+                        // labels/config) - not wired up yet, just reserves the
+                        // spot in the menu.
+                        DropdownMenuItem(
+                            text = { Text("Add model", color = Color.White) },
+                            leadingIcon = { Icon(Icons.Filled.Add, contentDescription = null, tint = Color.White) },
+                            onClick = {
+                                showModelMenu = false
+                                Toast.makeText(context, "Add model - coming soon", Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                    }
                     }
                 }
 
                 // Settings button — hosts FPS (read-only), RGB controls, and
                 // Resolution (read-only spec + live device-reported sizes).
-                Box(modifier = Modifier.weight(1f)) {
+                Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                    // Same pattern as the AI button above: wrap the button
+                    // and its menu together, sized to just the button's own
+                    // footprint (not the full quarter-width slot this sits
+                    // in). The DropdownMenu anchors to whatever Box directly
+                    // contains it, so anchoring it here - already centered
+                    // in the slot by the outer Box above - keeps the popup
+                    // aligned directly above the button on any screen width.
+                    Box {
                     CircularNavButton(
                         icon = Icons.Filled.Settings,
                         label = "Settings",
@@ -864,14 +931,16 @@ fun DemoScreen() {
                         restSize = navRestSize,
                         selectedSize = navSelectedSize,
                         iconSize = navIconSize,
+                        labelWidth = navLabelWidth,
                         onClick = { showSettingsMenu = true }
                     )
 
                     DropdownMenu(
                         expanded = showSettingsMenu,
                         onDismissRequest = { showSettingsMenu = false },
+                        modifier = Modifier.widthIn(max = navMenuMaxWidth),
                         containerColor = Color(0xFF2D2D2D),
-                        offset = DpOffset(x = settingsMenuOffsetX, y = (-5).dp)
+                        offset = DpOffset(x = 15.dp, y = (-5).dp)
                     ) {
                         // ── FPS — live measured vs rated spec. Tapping opens the
                         // FPS controls panel (same pattern as RGB controls below),
@@ -957,7 +1026,14 @@ fun DemoScreen() {
                         // — as a menu item instead of a blocking dialog.
                         if (detectedDevice != null) {
                             DropdownMenuItem(
-                                text = { Text("Device: ${matchedSensor?.shortName ?: detectedDevice.name}", color = Color.White) },
+                                text = {
+                                    Text(
+                                        "Device: ${matchedSensor?.shortName ?: detectedDevice.name}",
+                                        color = Color.White,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                },
                                 leadingIcon = { Icon(Icons.Filled.Info, contentDescription = null, tint = Color.White) },
                                 enabled = false,
                                 onClick = { }
@@ -979,6 +1055,8 @@ fun DemoScreen() {
                                     "Serial: ${detectedDevice.serialNumber}",
                                     fontSize = 12.sp,
                                     color = Color(0xFF9A9A9A),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.padding(start = 48.dp, end = 12.dp, top = 4.dp, bottom = 4.dp)
                                 )
                             }
@@ -998,6 +1076,7 @@ fun DemoScreen() {
                                 onClick = { }
                             )
                         }
+                    }
                     }
                 }
             }
@@ -1132,6 +1211,7 @@ fun DemoScreen() {
                             restSize = navSelectedSize,
                             selectedSize = navSelectedSize,
                             iconSize = navIconSize,
+                            labelWidth = navLabelWidthWide,
                             onClick = { repeatAnalysisImage() }
                         )
                     }
@@ -1149,6 +1229,7 @@ fun DemoScreen() {
                             restSize = navSelectedSize,
                             selectedSize = navSelectedSize,
                             iconSize = navIconSize,
+                            labelWidth = navLabelWidth,
                             onClick = { analyzeCapturedImage() }
                         )
                     }
@@ -1208,7 +1289,7 @@ fun DemoScreen() {
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .padding(bottom = 144.dp)
+                    .padding(bottom = bottomBarHeight + 12.dp)
                     .background(Color(0xFF262626), RoundedCornerShape(12.dp))
                     .border(1.dp, Color(0xFF3D3D3D), RoundedCornerShape(12.dp))
                     .padding(12.dp)
@@ -1278,7 +1359,7 @@ fun DemoScreen() {
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .padding(bottom = 144.dp)
+                    .padding(bottom = bottomBarHeight + 12.dp)
                     .background(Color(0xFF262626), RoundedCornerShape(12.dp))
                     .border(1.dp, Color(0xFF3D3D3D), RoundedCornerShape(12.dp))
                     .padding(12.dp)
@@ -1408,7 +1489,14 @@ fun DemoScreen() {
                                     .clip(RoundedCornerShape(8.dp))
                             )
                         }
-                        Text(text = app.label, color = Color.White, fontSize = 16.sp)
+                        Text(
+                            text = app.label,
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
                     }
                     HorizontalDivider(color = Color(0xFF3D3D3D))
                 }
@@ -1507,6 +1595,16 @@ fun DemoScreen() {
                                 Text(name, color = Color.White, fontSize = 15.sp)
                             }
                         }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Text(
+                            "LASR Lab · TU Dresden",
+                            color = Color(0xFF9A9A9A),
+                            fontSize = 12.sp,
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center
+                        )
 
                         Spacer(modifier = Modifier.height(22.dp))
 
