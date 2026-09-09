@@ -742,7 +742,7 @@ fun DemoScreen() {
             // half the difference between the button's width and the menu's
             // width - instead of a hand-tuned constant that only happened to
             // look right on one screen size.
-            val navAiMenuWidth = (maxWidth * 0.42f).coerceIn(150.dp, 190.dp)
+            val navAiMenuWidth = (maxWidth * 0.52f).coerceIn(190.dp, 240.dp)
             val navAiMenuOffsetX = (navLabelWidth - navAiMenuWidth) / 2
             // The Settings menu is anchored to the Settings button itself
             // (the last, rightmost button), so it always opens leftward
@@ -1295,6 +1295,17 @@ fun DemoScreen() {
         // covers the case where RGB controls were already open and the user
         // then hot-swaps to a GelSight Mini without closing the panel first.
         if (showRgbControls && matchedSensor?.folderName != "GelSightMini") {
+            // Invisible full-screen scrim placed behind the panel below -
+            // same outside-tap-to-dismiss behavior as the nav DropdownMenus.
+            // No ripple/indication since it covers the whole screen.
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { showRgbControls = false }
+            )
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -1365,6 +1376,15 @@ fun DemoScreen() {
 
         if (showFpsControls && matchedSensor != null) {
             val ratedFps = matchedSensor.maxFps
+            // Same outside-tap-to-dismiss scrim as the RGB panel above.
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { showFpsControls = false }
+            )
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -1618,6 +1638,7 @@ fun DemoScreen() {
                                     name,
                                     color = Color.White,
                                     fontSize = 15.sp,
+                                    textDecoration = TextDecoration.Underline,
                                     modifier = Modifier.weight(1f)
                                 )
                                 Icon(
