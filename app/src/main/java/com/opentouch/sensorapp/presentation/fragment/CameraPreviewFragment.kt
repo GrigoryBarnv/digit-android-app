@@ -114,16 +114,24 @@ class CameraPreviewFragment : CameraFragment() {
     private var frameTick = 0
     private var fpsJob: Job? = null
 
-    // Lightweight frame callback: it does NOT process the bytes, it only counts
-    // frames so we can derive a real, measured FPS for the read-only display.
+    @Volatile
+    var liveFrameListener: IPreviewDataCallBack? = null
+
+    // Count every rendered frame without reading pixels. Live AI requests
+    // occasional RGBA frames and forwards them without waiting for inference.
     private val fpsCounter = object : IPreviewDataCallBack {
+        override fun shouldReadFrame(): Boolean {
+            frameTick++
+            return liveFrameListener?.shouldReadFrame() == true
+        }
+
         override fun onPreviewData(
             data: ByteArray?,
             width: Int,
             height: Int,
             format: IPreviewDataCallBack.DataFormat
         ) {
-            frameTick++
+            liveFrameListener?.onPreviewData(data, width, height, format)
         }
     }
 
@@ -173,6 +181,7 @@ class CameraPreviewFragment : CameraFragment() {
     }
 
     private fun stopFpsMeasurement() {
+        _isStreaming.value = false
         fpsJob?.cancel()
         fpsJob = null
         _currentFps.value = 0
@@ -433,6 +442,7 @@ class CameraPreviewFragment : CameraFragment() {
         hideSupportedModelsList()
         when (code) {
             ICameraStateCallBack.State.OPENED -> {
+                _isStreaming.value = true
                 statusPillView?.visibility = View.GONE
                 disconnectedOverlay?.visibility = View.GONE
                 _binding?.reconnectButton?.visibility = View.GONE
@@ -569,6 +579,7 @@ class CameraPreviewFragment : CameraFragment() {
     }
 
     override fun onDestroyView() {
+        liveFrameListener = null
         permissionRetryJob?.cancel()
         permissionRetryJob = null
         stopFpsMeasurement()
@@ -1611,6 +1622,9 @@ class CameraPreviewFragment : CameraFragment() {
         // active fragment. DemoScreen reads this for the read-only FPS display.
         private val _currentFps = mutableStateOf(0)
         val currentFps: State<Int> get() = _currentFps
+
+        private val _isStreaming = mutableStateOf(false)
+        val isStreaming: State<Boolean> get() = _isStreaming
 
         // The FPS the user has requested via the Settings slider. Null means
         // "no explicit choice yet" - DemoScreen falls back to the connected

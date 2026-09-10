@@ -2,7 +2,6 @@ package com.opentouch.sensorapp.presentation.screen
 
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
@@ -46,7 +45,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LinkOff
@@ -57,7 +55,6 @@ import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
-import androidx.compose.material.icons.filled.Troubleshoot
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -111,7 +108,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.layout.ContentScale
 import androidx.fragment.app.FragmentActivity
 import androidx.fragment.app.FragmentContainerView
 import androidx.fragment.app.commit
@@ -119,8 +115,12 @@ import com.opentouch.sensorapp.R
 import com.opentouch.sensorapp.data.ResolutionFpsOption
 import com.opentouch.sensorapp.data.SupportedSensors
 import com.opentouch.sensorapp.ml.ModelPrediction
+import com.opentouch.sensorapp.ml.LiveFrameSource
+import com.opentouch.sensorapp.ml.LiveModelAnalyzer
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.CancellationException
 import com.opentouch.sensorapp.ml.ModelRepository
-import com.opentouch.sensorapp.ml.ModelRunner
 import com.opentouch.sensorapp.ml.ModelRuntimeLoader
 import com.opentouch.sensorapp.ml.MlRuntimeInstaller
 import com.opentouch.sensorapp.ml.MlRuntimeState
@@ -385,10 +385,12 @@ fun DemoScreen(
     var showModelMenu by remember { mutableStateOf(false) }
     var analysisResult by remember { mutableStateOf<ModelPrediction?>(null) }
     var analysisError by remember { mutableStateOf<String?>(null) }
-    var analysisBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var isAnalyzing by remember { mutableStateOf(false) }
-    var modelRunner by remember { mutableStateOf<ModelRunner?>(null) }
-    var modelLoadError by remember { mutableStateOf<String?>(null) }
+    var analysisStatus by remember { mutableStateOf("Waiting for sensor") }
+    var analysisDurationMs by remember { mutableStateOf<Long?>(null) }
+    val liveAnalyzer = remember { LiveModelAnalyzer() }
+    val cameraStreaming by CameraPreviewFragment.isStreaming
+    val lifecycle = (context as FragmentActivity).lifecycle
+    var isResumed by remember { mutableStateOf(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
     val debugRuntimeBundled = remember { ModelRuntimeLoader.isDebugRuntimeBundled() }
     var mlRuntimeState by remember {
         mutableStateOf(
@@ -429,22 +431,52 @@ fun DemoScreen(
             onIncomingModelHandled()
         }
     }
-    LaunchedEffect(selectedModel, mlRuntimeState) {
-        modelRunner?.close()
-        modelRunner = null
-        modelLoadError = null
-        if (mlRuntimeState != MlRuntimeState.READY) return@LaunchedEffect
-        val model = selectedModel ?: return@LaunchedEffect
-        try {
-            modelRunner = withContext(Dispatchers.IO) {
-                ModelRuntimeLoader.create(model.modelFile, model.configFile)
-            }
-        } catch (error: Exception) {
-            modelLoadError = error.message ?: "Could not load model"
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, _ ->
+            isResumed = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
         }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
     }
-    DisposableEffect(Unit) {
-        onDispose { modelRunner?.close() }
+    DisposableEffect(liveAnalyzer) {
+        onDispose { liveAnalyzer.close() }
+    }
+    LaunchedEffect(selectedModel, mlRuntimeState, cameraFragment, cameraStreaming, isResumed) {
+        analysisResult = null
+        analysisError = null
+        analysisDurationMs = null
+        val model = selectedModel ?: return@LaunchedEffect
+        analysisStatus = when {
+            mlRuntimeState == MlRuntimeState.DOWNLOADING -> "Downloading AI runtime..."
+            mlRuntimeState != MlRuntimeState.READY -> "AI runtime unavailable"
+            !isResumed -> "Live analysis paused"
+            !cameraStreaming -> "Waiting for sensor"
+            else -> "Loading model..."
+        }
+        val camera = cameraFragment ?: return@LaunchedEffect
+        if (mlRuntimeState != MlRuntimeState.READY || !cameraStreaming || !isResumed) return@LaunchedEffect
+        val source = LiveFrameSource()
+        camera.liveFrameListener = source
+        try {
+            liveAnalyzer.analyze(
+                model,
+                source,
+                onReady = { analysisStatus = "Waiting for first result..." },
+                onPrediction = { result, durationMs ->
+                    analysisResult = result
+                    analysisDurationMs = durationMs
+                    analysisStatus = "Live"
+                }
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            analysisResult = null
+            analysisError = error.cause?.message ?: error.message ?: "Live analysis failed"
+        } finally {
+            source.close()
+            if (camera.liveFrameListener === source) camera.liveFrameListener = null
+        }
     }
 
     val importModelLauncher = rememberLauncherForActivityResult(
@@ -535,56 +567,8 @@ fun DemoScreen(
         return "%02d:%02d".format(m, s)
     }
 
-    fun loadCapturedBitmap(path: String): Bitmap? {
-        return try {
-            if (path.startsWith("content://")) {
-                context.contentResolver.openInputStream(Uri.parse(path))?.use { input ->
-                    BitmapFactory.decodeStream(input)
-                }
-            } else {
-                BitmapFactory.decodeFile(path)
-            }
-        } catch (_: Exception) {
-            null
-        }
-    }
-
     // ── Capture button handler ────────────────────────────────────────────────
     fun onCaptureClicked() {
-        if (selectedModel != null) {
-            if (isCapturing || isAnalyzing) return
-            if (isVideoMode) isVideoMode = false
-            isCapturing = true
-            analysisResult = null
-            analysisError = null
-
-            val modelAtCapture = selectedModel
-            val cameraReady = CameraPreviewFragment.requestCapture { success, path ->
-                isCapturing = false
-                if (!success || path == null) {
-                    analysisError = path ?: "Capture failed"
-                    Toast.makeText(context, "Analysis capture failed", Toast.LENGTH_SHORT).show()
-                    return@requestCapture
-                }
-
-                analysisScope.launch {
-                    val bitmap = withContext(Dispatchers.IO) { loadCapturedBitmap(path) }
-                    if (selectedModel == modelAtCapture) {
-                        if (bitmap != null) {
-                            analysisBitmap = bitmap
-                        } else {
-                            analysisError = "Could not read captured image"
-                        }
-                    }
-                }
-            }
-            if (!cameraReady) {
-                isCapturing = false
-                Toast.makeText(context, "Camera not ready", Toast.LENGTH_SHORT).show()
-            }
-            return
-        }
-
         if (isVideoMode) {
             if (!isRecording) {
                 val started = CameraPreviewFragment.requestStartRecording(
@@ -621,34 +605,6 @@ fun DemoScreen(
                 isCapturing = false
                 Toast.makeText(context, "Camera not ready", Toast.LENGTH_SHORT).show()
             }
-        }
-    }
-
-    fun repeatAnalysisImage() {
-        analysisBitmap = null
-        analysisResult = null
-        analysisError = null
-        isAnalyzing = false
-    }
-
-    fun analyzeCapturedImage() {
-        val bitmap = analysisBitmap ?: return
-        val runner = modelRunner
-        if (runner == null) {
-            analysisError = modelLoadError ?: when (mlRuntimeState) {
-                MlRuntimeState.DOWNLOADING -> "AI runtime is still downloading"
-                MlRuntimeState.UNAVAILABLE,
-                MlRuntimeState.FAILED -> "AI runtime is unavailable"
-                MlRuntimeState.READY -> "AI model is still loading"
-            }
-            return
-        }
-        isAnalyzing = true
-        analysisError = null
-        analysisScope.launch {
-            val result = withContext(Dispatchers.Default) { runner.run(bitmap) }
-            isAnalyzing = false
-            if (selectedModel != null) analysisResult = result
         }
     }
 
@@ -754,15 +710,6 @@ fun DemoScreen(
                             activity.supportFragmentManager.findFragmentByTag(cameraFragmentTag) as? CameraPreviewFragment
                     }
                 )
-
-                analysisBitmap?.let { bitmap ->
-                    Image(
-                        bitmap = bitmap.asImageBitmap(),
-                        contentDescription = "Captured image",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.FillBounds
-                    )
-                }
 
                 if (flashAlpha > 0f) {
                     Box(
@@ -941,7 +888,16 @@ fun DemoScreen(
                     selectedSize = navSelectedSize,
                     iconSize = navIconSize,
                     labelWidth = navLabelWidth,
-                    onClick = { if (!isRecording) isVideoMode = !isVideoMode }
+                    onClick = {
+                        if (!isRecording) {
+                            if (selectedModel != null) {
+                                selectedModel = null
+                                isVideoMode = false
+                            } else {
+                                isVideoMode = !isVideoMode
+                            }
+                        }
+                    }
                 )
 
                 // AI button
@@ -962,6 +918,7 @@ fun DemoScreen(
                         // bottom navigation never changes width.
                         label = "AI",
                         selected = selectedModel != null,
+                        enabled = !isRecording,
                         restSize = navRestSize,
                         selectedSize = navSelectedSize,
                         iconSize = navIconSize,
@@ -979,10 +936,8 @@ fun DemoScreen(
                             text = { Text("None", color = Color.White) },
                             onClick = {
                                 selectedModel = null
-                                analysisBitmap = null
                                 analysisResult = null
                                 analysisError = null
-                                isAnalyzing = false
                                 showModelMenu = false
                             }
                         )
@@ -1261,7 +1216,7 @@ fun DemoScreen(
                 val ringGapSize = captureSize * 0.86f
                 val discSize = captureSize * 0.66f
 
-                if (selectedModel == null || analysisBitmap == null) {
+                if (selectedModel == null) {
                     Box(
                         modifier = Modifier.size(captureSize),
                         contentAlignment = Alignment.Center
@@ -1311,54 +1266,11 @@ fun DemoScreen(
                     )
                     }
                 } else {
-                    // Keep the center slot reserved after capture so the two
-                    // actions stay aligned with the original shutter position.
+                    // Reserve the same row height while live results change.
                     Spacer(modifier = Modifier.size(captureSize))
                 }
 
                 if (selectedModel != null) {
-                    // These actions share the shutter row. Their quarter-width
-                    // slots line up with Gallery and Settings without adding a
-                    // second row or pushing the preview upward.
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.CenterStart)
-                            .width(maxWidth / 4f),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularNavButton(
-                            icon = Icons.Filled.Cameraswitch,
-                            label = "New image",
-                            selected = false,
-                            enabled = analysisBitmap != null && !isAnalyzing,
-                            restSize = navSelectedSize,
-                            selectedSize = navSelectedSize,
-                            iconSize = navIconSize,
-                            labelWidth = navLabelWidthWide,
-                            onClick = { repeatAnalysisImage() }
-                        )
-                    }
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .width(maxWidth / 4f),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularNavButton(
-                            icon = Icons.Filled.Troubleshoot,
-                            label = "Analyze",
-                            selected = false,
-                            enabled = analysisBitmap != null && !isAnalyzing,
-                            restSize = navSelectedSize,
-                            selectedSize = navSelectedSize,
-                            iconSize = navIconSize,
-                            labelWidth = navLabelWidth,
-                            onClick = { analyzeCapturedImage() }
-                        )
-                    }
-                }
-
-                if (selectedModel != null && (isAnalyzing || analysisResult != null || analysisError != null)) {
                     Surface(
                         modifier = Modifier
                             .align(Alignment.Center)
@@ -1373,12 +1285,6 @@ fun DemoScreen(
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             when {
-                                isAnalyzing -> Text(
-                                    "Analyzing...",
-                                    color = Color.White,
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
                                 analysisResult != null -> {
                                     val result = analysisResult!!
                                     Text(
@@ -1394,7 +1300,14 @@ fun DemoScreen(
                                     fontSize = 13.sp,
                                     textAlign = TextAlign.Center
                                 )
-                                else -> Unit
+                                else -> Text(analysisStatus, color = Color.White, fontSize = 14.sp)
+                            }
+                            if (analysisResult != null && analysisError == null) {
+                                Text(
+                                    "Live · ${analysisDurationMs ?: 0} ms",
+                                    color = Color.LightGray,
+                                    fontSize = 11.sp
+                                )
                             }
                         }
                     }

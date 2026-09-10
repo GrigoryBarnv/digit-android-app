@@ -72,9 +72,20 @@ publishing and installing the app as an Android App Bundle. A standalone APK
 installed outside Google Play cannot download an on-demand Play feature, so
 the AI action remains unavailable in that case.
 
-When the user captures an image and selects Analyze, `ModelRunner.kt` resizes
-and normalizes the image, runs it with ONNX Runtime, and displays the class
-with the highest probability. The current model was trained with very few
+Selecting a model in the AI menu starts live analysis immediately. The sensor
+preview keeps running, and the result shows the latest class, confidence, and
+processing time. Select **None** or tap **Photo** to stop analysis and return to capture.
+There is no need to freeze or save an image first.
+
+`LiveModelAnalyzer.kt` processes frames on a dedicated background thread.
+The camera's GL capture thread samples up to five frames per second (one every
+200 ms) and keeps only the newest waiting frame. If inference is slower, older
+frames are dropped; results update whenever processing finishes. Bitmaps are
+released after each run, and the session closes after pending inference finishes
+when changing models, disconnecting the sensor, or backgrounding the app.
+Debug and release runners use at most two intra-op CPU threads for inference.
+
+The current model was trained with very few
 images, so its predictions are intended for workflow testing rather than
 reliable classification.
 

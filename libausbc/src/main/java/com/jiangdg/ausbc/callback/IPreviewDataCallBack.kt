@@ -20,6 +20,9 @@ package com.jiangdg.ausbc.callback
  * @author Created by jiangdg on 2022/1/29
  */
 interface IPreviewDataCallBack {
+    /** Called on the GL capture thread. Return false to skip expensive pixel readback. */
+    fun shouldReadFrame(): Boolean = true
+
     fun onPreviewData(data: ByteArray?, width: Int, height: Int, format: DataFormat)
 
     enum class DataFormat {

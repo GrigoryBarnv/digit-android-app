@@ -41,7 +41,12 @@ class DebugOnnxModelRunner private constructor(
         require(labels.isNotEmpty()) { "Model must define at least one class label" }
         require(mean.size == 3 && std.size == 3) { "Model normalization must contain 3 RGB values" }
 
-        session = environment.createSession(modelFile.readBytes(), OrtSession.SessionOptions())
+        session = OrtSession.SessionOptions().use { options ->
+            // Leave CPU capacity for the camera renderer and UI during continuous inference.
+            options.setIntraOpNumThreads(2)
+            options.setInterOpNumThreads(1)
+            environment.createSession(modelFile.absolutePath, options)
+        }
         inputName = session.inputNames.firstOrNull()
             ?: error("ONNX model does not define an input")
     }

@@ -247,15 +247,21 @@ class RenderManager(
             val renderHeight = mCaptureRender?.getRenderHeight() ?: mHeight
             val rgbaLen = renderWidth * renderHeight * 4
 
-            mPreviewDataCbList?.forEach { callback ->
-                if (mPreviewByteBuffer==null || mPreviewByteBuffer?.remaining() != rgbaLen) {
-                    mPreviewByteBuffer = ByteBuffer.allocateDirect(rgbaLen)
-                    mPreviewByteBuffer?.order(ByteOrder.LITTLE_ENDIAN)
-                }
-                mPreviewByteBuffer?.let {
-                    it.clear()
-                    GLBitmapUtils.readPixelToByteBuffer(id,renderWidth, renderHeight, mPreviewByteBuffer)
-                    callback.onPreviewData(it.array(),renderWidth, renderHeight, IPreviewDataCallBack.DataFormat.RGBA)
+            val callbacks = mPreviewDataCbList?.filter { it.shouldReadFrame() }.orEmpty()
+            if (callbacks.isEmpty()) return
+            if (mPreviewByteBuffer?.capacity() != rgbaLen) {
+                mPreviewByteBuffer = ByteBuffer.allocateDirect(rgbaLen).order(ByteOrder.LITTLE_ENDIAN)
+            }
+            mPreviewByteBuffer?.let { buffer ->
+                buffer.clear()
+                GLBitmapUtils.readPixelToByteBuffer(id, renderWidth, renderHeight, buffer)
+                buffer.rewind()
+                // Direct buffers need not expose array(). One owned copy is shared by
+                // listeners, which must treat it as read-only; no GPU work on the UI.
+                val pixels = ByteArray(rgbaLen)
+                buffer.get(pixels)
+                callbacks.forEach { callback ->
+                    callback.onPreviewData(pixels, renderWidth, renderHeight, IPreviewDataCallBack.DataFormat.RGBA)
                 }
             }
         }
