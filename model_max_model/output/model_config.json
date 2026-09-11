@@ -1,0 +1,27 @@
+{
+  "input_width": 224,
+  "input_height": 224,
+  "color_order": "RGB",
+  "mean": [
+    0.485,
+    0.456,
+    0.406
+  ],
+  "std": [
+    0.229,
+    0.224,
+    0.225
+  ],
+  "labels": [
+    "3dprint",
+    "cotton",
+    "curdory",
+    "finger",
+    "flower_fabric",
+    "nothing",
+    "synthetic_leather",
+    "teddy",
+    "wool"
+  ],
+  "output_type": "logits"
+}

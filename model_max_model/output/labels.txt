@@ -1,0 +1,9 @@
+3dprint
+cotton
+curdory
+finger
+flower_fabric
+nothing
+synthetic_leather
+teddy
+wool

@@ -45,7 +45,7 @@ class OnnxModelRunner private constructor(
             // Leave CPU capacity for the camera renderer and UI during continuous inference.
             options.setIntraOpNumThreads(2)
             options.setInterOpNumThreads(1)
-            environment.createSession(modelFile.absolutePath, options)
+            environment.createSession(modelFile.readBytes(), options)
         }
         inputName = session.inputNames.firstOrNull()
             ?: error("ONNX model does not define an input")

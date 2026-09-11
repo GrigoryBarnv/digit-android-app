@@ -45,6 +45,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LinkOff
@@ -57,6 +58,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -69,6 +71,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -383,11 +386,13 @@ fun DemoScreen(
     var availableModels by remember { mutableStateOf<List<StoredModel>>(emptyList()) }
     var selectedModel by remember { mutableStateOf<StoredModel?>(null) }
     var showModelMenu by remember { mutableStateOf(false) }
+    var modelPendingDeletion by remember { mutableStateOf<StoredModel?>(null) }
     var analysisResult by remember { mutableStateOf<ModelPrediction?>(null) }
     var analysisError by remember { mutableStateOf<String?>(null) }
     var analysisStatus by remember { mutableStateOf("Waiting for sensor") }
     var analysisDurationMs by remember { mutableStateOf<Long?>(null) }
     val liveAnalyzer = remember { LiveModelAnalyzer() }
+    val activeCamera by CameraPreviewFragment.activeInstanceState
     val cameraStreaming by CameraPreviewFragment.isStreaming
     val lifecycle = (context as FragmentActivity).lifecycle
     var isResumed by remember { mutableStateOf(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
@@ -441,7 +446,7 @@ fun DemoScreen(
     DisposableEffect(liveAnalyzer) {
         onDispose { liveAnalyzer.close() }
     }
-    LaunchedEffect(selectedModel, mlRuntimeState, cameraFragment, cameraStreaming, isResumed) {
+    LaunchedEffect(selectedModel, mlRuntimeState, activeCamera, cameraFragment, cameraStreaming, isResumed) {
         analysisResult = null
         analysisError = null
         analysisDurationMs = null
@@ -453,7 +458,14 @@ fun DemoScreen(
             !cameraStreaming -> "Waiting for sensor"
             else -> "Loading model..."
         }
-        val camera = cameraFragment ?: return@LaunchedEffect
+        // Prefer the observable active instance. The AndroidView callback may
+        // still hold null (or an old fragment) while FragmentManager completes
+        // the transaction that opens the sensor.
+        val camera = activeCamera ?: cameraFragment
+        if (camera == null) {
+            analysisStatus = "Preparing camera..."
+            return@LaunchedEffect
+        }
         if (mlRuntimeState != MlRuntimeState.READY || !cameraStreaming || !isResumed) return@LaunchedEffect
         val source = LiveFrameSource()
         camera.liveFrameListener = source
@@ -461,6 +473,7 @@ fun DemoScreen(
             liveAnalyzer.analyze(
                 model,
                 source,
+                onLoading = { analysisStatus = "Creating model session..." },
                 onReady = { analysisStatus = "Waiting for first result..." },
                 onPrediction = { result, durationMs ->
                     analysisResult = result
@@ -501,6 +514,58 @@ fun DemoScreen(
                 }
             }
         }
+    }
+
+    fun requestModelDeletion(model: StoredModel) {
+        showModelMenu = false
+        modelPendingDeletion = model
+    }
+
+    fun deletePendingModel() {
+        val model = modelPendingDeletion ?: return
+        modelPendingDeletion = null
+        if (selectedModel?.modelFile?.canonicalPath == model.modelFile.canonicalPath) {
+            selectedModel = null
+            analysisResult = null
+            analysisError = null
+        }
+        analysisScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    ModelRepository.deleteModel(context, model)
+                }
+                availableModels = withContext(Dispatchers.IO) {
+                    ModelRepository.listModels(context)
+                }
+                Toast.makeText(context, "${model.displayName} deleted", Toast.LENGTH_SHORT).show()
+            } catch (error: Exception) {
+                Toast.makeText(
+                    context,
+                    error.message ?: "Could not delete model",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
+    modelPendingDeletion?.let { model ->
+        AlertDialog(
+            onDismissRequest = { modelPendingDeletion = null },
+            title = { Text("Delete model?") },
+            text = {
+                Text("Delete ${model.displayName} and its configuration file from this device?")
+            },
+            confirmButton = {
+                TextButton(onClick = { deletePendingModel() }) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { modelPendingDeletion = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     // ── Settings menu (FPS / RGB / Resolution) ────────────────────────────────
@@ -772,7 +837,7 @@ fun DemoScreen(
             // usual single word (e.g. "New image").
             val navLabelWidth = (maxWidth * 0.185f).coerceIn(58.dp, 92.dp)
             val navLabelWidthWide = (maxWidth * 0.24f).coerceIn(76.dp, 120.dp)
-            // The AI menu is short (None / Key-Finger / Add model), so it
+            // The AI menu contains None, installed models, and the import action,
             // gets its own, narrower scaled width rather than reusing the
             // wider Settings one. Giving the menu a known, exact width (not
             // just a max) lets the x offset below be calculated precisely -
@@ -960,14 +1025,33 @@ fun DemoScreen(
                         }
                         availableModels.forEach { model ->
                             DropdownMenuItem(
-                                text = { Text(model.displayName, color = Color.White) },
-                                enabled = mlRuntimeState == MlRuntimeState.READY,
+                                text = {
+                                    Text(
+                                        model.displayName,
+                                        color = if (mlRuntimeState == MlRuntimeState.READY) {
+                                            Color.White
+                                        } else {
+                                            Color.LightGray
+                                        }
+                                    )
+                                },
+                                trailingIcon = {
+                                    IconButton(onClick = { requestModelDeletion(model) }) {
+                                        Icon(
+                                            Icons.Filled.Delete,
+                                            contentDescription = "Delete ${model.displayName}",
+                                            tint = Color(0xFFFFB4AB)
+                                        )
+                                    }
+                                },
                                 onClick = {
-                                    selectedModel = model
-                                    isVideoMode = false
-                                    analysisResult = null
-                                    analysisError = null
-                                    showModelMenu = false
+                                    if (mlRuntimeState == MlRuntimeState.READY) {
+                                        selectedModel = model
+                                        isVideoMode = false
+                                        analysisResult = null
+                                        analysisError = null
+                                        showModelMenu = false
+                                    }
                                 }
                             )
                         }

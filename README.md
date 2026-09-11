@@ -21,6 +21,7 @@ The app connects to a supported USB UVC sensor, shows the live camera preview, a
 - Gallery shortcut
 - RGB illumination controls
 - On-device key/finger image classification
+- Live model inference while the sensor keeps streaming
 
 ## On-Device ML Model
 
@@ -44,14 +45,17 @@ same base name, for example:
 - `key_finger.onnx` - trained two-class model
 - `key_finger.json` - input size, RGB normalization, and output labels
 
-The key/finger JSON configuration is generated beside the model when the
-model is imported. Downloaded models can use the same directory and naming
-convention. This keeps large model files independent from APK releases and
-avoids storage permissions because the directory is app-owned.
+The app does not bundle or generate a model automatically. Downloaded models
+must include their matching JSON configuration. This keeps large model files
+independent from APK releases and avoids storage permissions because the
+directory is app-owned. Models remain when the app is updated, so they can be
+reused; the AI menu provides a delete button for removing a model and its JSON.
+The model folder is excluded from Android backup and device transfer, so an
+uninstall followed by a fresh install does not restore the old models.
 
 For a more comfortable one-download flow, package the files as
 `<model-name>.opentouchmodel`. This is a ZIP-based OpenTouch package containing
-`model.onnx` and, for models other than key/finger, `model.json`. The app is
+`model.onnx` and `model.json`. The app is
 registered as an Android file handler for this extension, so tapping the
 download can open OpenTouch and extract the files automatically. Create a
 package with:
@@ -62,8 +66,7 @@ package with:
   -ConfigPath .\path\to\key_finger.json
 ```
 
-For `key_finger.onnx`, `-ConfigPath` can be omitted because the app generates
-the known key/finger configuration automatically.
+The configuration is required, including for `key_finger.onnx`.
 
 ONNX Runtime is delivered separately in the `mlruntime` dynamic feature
 module. The app requests this signed module on first launch; Google Play

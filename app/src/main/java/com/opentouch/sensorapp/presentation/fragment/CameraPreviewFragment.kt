@@ -587,7 +587,10 @@ class CameraPreviewFragment : CameraFragment() {
         // lastDetectedDeviceKey so returning with the same sensor still
         // attached does NOT re-show the popup.
         _detectedDevice.value = null
-        if (activeInstance === this) activeInstance = null
+        if (activeInstance === this) {
+            activeInstance = null
+            _activeInstanceState.value = null
+        }
         _binding = null
         super.onDestroyView()
     }
@@ -595,6 +598,7 @@ class CameraPreviewFragment : CameraFragment() {
     override fun onStart() {
         super.onStart()
         activeInstance = this
+        _activeInstanceState.value = this
     }
 
     // Breaks the repeated-dialog cycle: registerMultiCamera() gets called
@@ -1611,6 +1615,13 @@ class CameraPreviewFragment : CameraFragment() {
 
         @Volatile
         private var activeInstance: CameraPreviewFragment? = null
+
+        // The AndroidView factory can run before FragmentManager has attached
+        // this fragment. Exposing the active instance as Compose state prevents
+        // live analysis from making a one-time null lookup and staying on
+        // "Loading model" forever.
+        private val _activeInstanceState = mutableStateOf<CameraPreviewFragment?>(null)
+        val activeInstanceState: State<CameraPreviewFragment?> get() = _activeInstanceState
 
         // The most recently detected USB device, and whether the UI has already
         // shown a popup for it. DemoScreen reads [detectedDevice] and shows a

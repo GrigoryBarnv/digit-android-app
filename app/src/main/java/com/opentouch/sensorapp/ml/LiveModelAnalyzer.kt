@@ -11,6 +11,7 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 
 /** The capture thread offers frames without waiting for inference. No disk/JPEG capture. */
@@ -55,13 +56,18 @@ class LiveModelAnalyzer : Closeable {
     suspend fun analyze(
         model: StoredModel,
         source: LiveFrameSource,
+        onLoading: () -> Unit,
         onReady: () -> Unit,
         onPrediction: (ModelPrediction, Long) -> Unit
     ) = withContext(dispatcher) {
         currentCoroutineContext().ensureActive()
+        withContext(Dispatchers.Main) { onLoading() }
         // Keeping creation and use inside the same context prevents cancellation
         // during model loading from leaking a native session.
-        ModelRuntimeLoader.create(model.modelFile, model.configFile).use { runner ->
+        val runner = withTimeoutOrNull(30_000L) {
+            ModelRuntimeLoader.create(model.modelFile, model.configFile)
+        } ?: error("Model loading timed out after 30 seconds")
+        runner.use {
             withContext(Dispatchers.Main) { onReady() }
             for (frame in source.frames) {
                 currentCoroutineContext().ensureActive()
@@ -71,7 +77,7 @@ class LiveModelAnalyzer : Closeable {
                     // CaptureRender already applies the sensor rotation and GL row flip,
                     // exactly as the existing saved-photo path does.
                     bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(frame.rgba))
-                    runner.run(bitmap)
+                    it.run(bitmap)
                 } finally {
                     bitmap.recycle()
                 }

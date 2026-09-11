@@ -1,0 +1,62 @@
+MAX_MODEL TRAINING
+==================
+
+This folder trains a separate OpenTouch model named max_model. It does not
+change the Android app source code.
+
+Source dataset
+--------------
+
+The expected structure is:
+
+  C:\Users\grigo\Downloads\data_ml_opentouch\<category>\image.png
+
+Every direct subfolder is treated as one class. The supplied dataset contains:
+
+  3dprint, cotton, curdory, finger, flower_fabric, nothing,
+  synthetic_leather, teddy, wool
+
+The default training command selects exactly 100 random images per category,
+using a fixed seed so the selection is reproducible. 80 images per category
+are used for training and 20 for validation.
+
+Windows setup
+-------------
+
+Open PowerShell in the repository root and create a virtual environment:
+
+  py -3.12 -m venv .max-model-venv
+  .\.max-model-venv\Scripts\python.exe -m pip install --upgrade pip
+  .\.max-model-venv\Scripts\python.exe -m pip install torch torchvision pillow onnx onnxscript
+
+If the computer has an NVIDIA CUDA setup, install the matching PyTorch build
+from https://pytorch.org/ instead of the generic torch command above.
+
+Train
+-----
+
+  .\.max-model-venv\Scripts\python.exe model_max_model\train_model.py `
+    --data-dir C:\Users\grigo\Downloads\data_ml_opentouch `
+    --images-per-class 100 `
+    --epochs 15
+
+Export ONNX and create the Android package
+------------------------------------------
+
+  .\.max-model-venv\Scripts\python.exe model_max_model\export_model.py --package
+
+The files are written to model_max_model\output\:
+
+  max_model.onnx
+  model_config.json
+  max_model.opentouchmodel
+
+Import max_model.opentouchmodel into OpenTouch with the AI model import action.
+The package contains model.onnx and model.json, which the Android app extracts
+into its private model directory.
+
+More images
+-----------
+
+To use a different number of pictures per category, change
+--images-per-class. The category folder names become the labels in the model.

@@ -23,8 +23,6 @@ data class StoredModel(
 object ModelRepository {
     private const val DIRECTORY_NAME = "models"
     private const val PACKAGE_EXTENSION = "opentouchmodel"
-    private const val KEY_FINGER_MODEL = "key_finger.onnx"
-    private const val KEY_FINGER_CONFIG = "key_finger.json"
     private const val PACKAGE_MODEL_ENTRY = "model.onnx"
     private const val PACKAGE_CONFIG_ENTRY = "model.json"
     private const val MAX_PACKAGE_ENTRY_BYTES = 1024L * 1024L * 1024L
@@ -42,7 +40,6 @@ object ModelRepository {
 
     fun listModels(context: Context): List<StoredModel> {
         val directory = modelsDirectory(context)
-        ensureKeyFingerConfig(directory)
         return directory.listFiles()
             .orEmpty()
             .filter { it.isFile && it.extension.lowercase(Locale.US) == "onnx" }
@@ -83,8 +80,23 @@ object ModelRepository {
         } finally {
             temporary.delete()
         }
-        ensureKeyFingerConfig(directory)
         return target
+    }
+
+    /** Deletes the selected model and its matching configuration file. */
+    fun deleteModel(context: Context, model: StoredModel) {
+        val directory = modelsDirectory(context).canonicalFile
+        val modelFile = model.modelFile.canonicalFile
+        val configFile = model.configFile.canonicalFile
+        require(modelFile.parentFile == directory && configFile.parentFile == directory) {
+            "The selected model is outside the app model directory"
+        }
+        if (modelFile.exists() && !modelFile.delete()) {
+            throw IOException("Could not delete model ${modelFile.name}")
+        }
+        if (configFile.exists() && !configFile.delete()) {
+            throw IOException("Could not delete configuration ${configFile.name}")
+        }
     }
 
     /** Extracts a single downloaded package containing model.onnx and model.json. */
@@ -136,15 +148,14 @@ object ModelRepository {
             require(modelFound) {
                 "The model package must contain model.onnx"
             }
-            require(configFound || baseName.equals("key_finger", ignoreCase = true)) {
+            require(configFound) {
                 "The model package must contain model.json"
             }
 
             val modelFile = File(directory, "$baseName.onnx")
             val configFile = File(directory, "$baseName.json")
             moveIntoPlace(modelTemporary, modelFile)
-            if (configFound) moveIntoPlace(configTemporary, configFile)
-            ensureKeyFingerConfig(directory)
+            moveIntoPlace(configTemporary, configFile)
             return modelFile
         } finally {
             temporaryDirectory.deleteRecursively()
@@ -188,22 +199,4 @@ object ModelRepository {
         return uri.lastPathSegment?.substringAfterLast('/') ?: "imported_model.onnx"
     }
 
-    private fun ensureKeyFingerConfig(directory: File) {
-        val modelFile = File(directory, KEY_FINGER_MODEL)
-        val configFile = File(directory, KEY_FINGER_CONFIG)
-        if (modelFile.isFile && !configFile.isFile) {
-            configFile.writeText(
-                """{
-  "input_width": 224,
-  "input_height": 224,
-  "color_order": "RGB",
-  "mean": [0.485, 0.456, 0.406],
-  "std": [0.229, 0.224, 0.225],
-  "labels": ["key", "finger"],
-  "output_type": "logits"
-}
-""".trimIndent()
-            )
-        }
-    }
 }
