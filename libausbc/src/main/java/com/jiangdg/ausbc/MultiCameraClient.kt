@@ -334,7 +334,13 @@ class MultiCameraClient(ctx: Context, callback: IDeviceConnectCallBack?) {
                         } else {
                             mPreviewDataCbList
                         }
-                        mRenderManager = RenderManager(ctx, previewWidth, previewHeight, previewCb)
+                        mRenderManager = RenderManager(
+                            ctx,
+                            previewWidth,
+                            previewHeight,
+                            previewCb,
+                            mCameraRequest!!.defaultRotateType
+                        )
                         mRenderManager?.startRenderScreen(screenWidth, screenHeight, surface, object : RenderManager.CameraSurfaceTextureListener {
                             override fun onSurfaceTextureAvailable(surfaceTexture: SurfaceTexture?) {
                                 if (surfaceTexture == null) {
@@ -742,6 +748,10 @@ class MultiCameraClient(ctx: Context, callback: IDeviceConnectCallBack?) {
             Triple(path, durationInSec, callBack).apply {
                 mCameraHandler?.obtainMessage(MSG_CAPTURE_VIDEO_START, this)?.sendToTarget()
             }
+        }
+
+        fun setVideoOverlayText(text: String?) {
+            mRenderManager?.setVideoOverlayText(text)
         }
 
         /**

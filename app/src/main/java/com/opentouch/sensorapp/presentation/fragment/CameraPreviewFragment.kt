@@ -8,6 +8,12 @@ import android.hardware.usb.UsbManager
 import android.content.Context
 import android.content.ContentValues
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.RectF
 import android.media.MediaScannerConnection
 import android.os.Build
 import android.os.Environment
@@ -284,12 +290,14 @@ class CameraPreviewFragment : CameraFragment() {
         // resume/reopen of the one already connected), just run a moment
         // earlier so the very first open already has the right target.
         val device = getDeviceList()?.firstOrNull()
-        if (device != null && "${device.vendorId}:${device.productId}" != lastDetectedDeviceKey) {
-            val sensor = SupportedSensors.classify(
-                device.vendorId,
-                device.productId,
-                device.productName
+        val sensor = device?.let {
+            SupportedSensors.classify(
+                it.vendorId,
+                it.productId,
+                it.productName
             ).sensor
+        }
+        if (device != null && "${device.vendorId}:${device.productId}" != lastDetectedDeviceKey) {
             _targetFps.value = sensor?.fpsStops
                 ?.firstOrNull { it == DEFAULT_PREVIEW_FPS }
                 ?: sensor?.fpsStops?.firstOrNull { it > 0 }
@@ -299,11 +307,14 @@ class CameraPreviewFragment : CameraFragment() {
         _targetFps.value?.let { setFps(it) }
 
         // Base (unrotated) size the user picked via the Settings resolution
-        // row - see changePreviewResolution(). Falls back to the 320x240
-        // default when nothing has been explicitly requested yet. Keep this
-        // request in the sensor's native landscape orientation so the UVC
-        // buffer, SurfaceTexture buffer, and renderer all use one geometry.
-        val (baseWidth, baseHeight) = _targetResolution.value ?: (320 to 240)
+        // row - see changePreviewResolution(). If none is selected yet,
+        // start from the connected sensor's default stream size instead of a
+        // hardcoded 320x240. GelSight Mini is a full-HD stream; requesting
+        // 320x240 there makes the UI lie about the size while the renderer
+        // still handles an ~8 MB RGBA frame.
+        val (baseWidth, baseHeight) = _targetResolution.value
+            ?: sensor?.let { it.nativeWidth to it.nativeHeight }
+            ?: (320 to 240)
 
         return CameraRequest.Builder()
             .setPreviewWidth(baseWidth)
@@ -455,6 +466,9 @@ class CameraPreviewFragment : CameraFragment() {
                 // Start measuring FPS: attach the lightweight frame counter and
                 // begin the once-per-second sampler.
                 getCurrentCamera()?.addPreviewDataCallBack(fpsCounter)
+                _currentPreviewSize.value = getCurrentPreviewSize()?.let {
+                    it.width to it.height
+                }
                 startFpsMeasurement()
 
                 // Show the "is this sensor supported?" popup only once per
@@ -528,6 +542,7 @@ class CameraPreviewFragment : CameraFragment() {
                 statusPillView?.visibility = View.VISIBLE
                 disconnectedOverlay?.visibility = View.VISIBLE
                 stopFpsMeasurement()
+                _currentPreviewSize.value = null
                 // Dismiss any visible popup, but DO NOT clear
                 // lastDetectedDeviceKey here — otherwise an app-resume reopen
                 // would treat the same sensor as new and re-show the popup.
@@ -980,18 +995,86 @@ class CameraPreviewFragment : CameraFragment() {
      * Called on the temp file before moving it to public storage.
      * If this fails, the photo is still saved — metadata failure is never fatal.
      */
-    private fun writeMetadata(path: String) {
+    private fun writeMetadata(path: String, analysisMetadata: String? = null) {
         try {
             val exif = ExifInterface(path)
             val exifDate = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).format(Date())
             exif.setAttribute(ExifInterface.TAG_DATETIME, exifDate)
             exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, exifDate)
             // Which camera took this photo — important for future multi-camera support.
-            exif.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, "Camera: $cameraId")
+            val description = buildString {
+                append("Camera: $cameraId")
+                if (!analysisMetadata.isNullOrBlank()) {
+                    append('\n')
+                    append(analysisMetadata)
+                }
+            }
+            exif.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, description)
             exif.saveAttributes()
             Logger.i("CameraPreviewFragment", "writeMetadata: saved for $path, camera=$cameraId")
         } catch (e: Exception) {
             Logger.e("CameraPreviewFragment", "writeMetadata failed: ${e.message}")
+        }
+    }
+
+    private fun writeVisibleAnalysisOverlay(path: String, analysisOverlayText: String?) {
+        if (analysisOverlayText.isNullOrBlank()) return
+        try {
+            val source = BitmapFactory.decodeFile(path) ?: return
+            val bitmap = source.copy(Bitmap.Config.ARGB_8888, true)
+            if (bitmap !== source) source.recycle()
+
+            val canvas = Canvas(bitmap)
+            val minSide = minOf(bitmap.width, bitmap.height).toFloat()
+            val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.WHITE
+                textSize = minOf(maxOf(minSide * 0.045f, 11f), 18f)
+                typeface = android.graphics.Typeface.create(
+                    android.graphics.Typeface.DEFAULT,
+                    android.graphics.Typeface.BOLD
+                )
+            }
+            val padding = maxOf(minSide * 0.025f, 6f)
+            val margin = maxOf(minSide * 0.035f, 8f)
+            val maxTextWidth = bitmap.width.toFloat() - margin * 2f - padding * 2f
+            val visibleChars = textPaint.breakText(
+                analysisOverlayText,
+                true,
+                maxTextWidth,
+                null
+            ).coerceIn(0, analysisOverlayText.length)
+            val overlayText = if (visibleChars < analysisOverlayText.length && visibleChars > 1) {
+                "${analysisOverlayText.take(visibleChars - 1)}…"
+            } else {
+                analysisOverlayText
+            }
+            val textWidth = textPaint.measureText(overlayText)
+            val textHeight = textPaint.fontMetrics.run { bottom - top }
+            val left = margin
+            val bottom = bitmap.height - margin
+            val rect = RectF(
+                left,
+                bottom - textHeight - padding * 2f,
+                (left + textWidth + padding * 2f).coerceAtMost(bitmap.width - margin),
+                bottom
+            )
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.argb(210, 32, 33, 38)
+            }.also { backgroundPaint ->
+                canvas.drawRoundRect(rect, padding, padding, backgroundPaint)
+            }
+            canvas.drawText(
+                overlayText,
+                rect.left + padding,
+                rect.bottom - padding - textPaint.fontMetrics.bottom,
+                textPaint
+            )
+            File(path).outputStream().use { output ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 95, output)
+            }
+            bitmap.recycle()
+        } catch (e: Exception) {
+            Logger.e("CameraPreviewFragment", "writeVisibleAnalysisOverlay failed: ${e.message}")
         }
     }
 
@@ -1004,7 +1087,12 @@ class CameraPreviewFragment : CameraFragment() {
      *
      * Returns the final path/URI string, or null if something went wrong.
      */
-    private fun moveToPublicStorage(tempPath: String, fileName: String, sensorFolder: String): String? {
+    private fun moveToPublicStorage(
+        tempPath: String,
+        fileName: String,
+        sensorFolder: String,
+        analysisMetadata: String? = null
+    ): String? {
         val context = requireContext()
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -1013,6 +1101,9 @@ class CameraPreviewFragment : CameraFragment() {
                     put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
                     put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
                     put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/OpenTouch_$sensorFolder")
+                    if (!analysisMetadata.isNullOrBlank()) {
+                        put(MediaStore.Images.ImageColumns.DESCRIPTION, analysisMetadata)
+                    }
                     // IS_PENDING = 1 means "I'm still writing this file, don't show it yet."
                     // We set it to 0 after the copy is done so the gallery shows it properly.
                     put(MediaStore.Images.Media.IS_PENDING, 1)
@@ -1092,7 +1183,11 @@ class CameraPreviewFragment : CameraFragment() {
      *   success = true  and the final file path/URI
      *   success = false and an error message
      */
-    fun capturePhoto(onDone: (success: Boolean, path: String?) -> Unit) {
+    fun capturePhoto(
+        onDone: (success: Boolean, path: String?) -> Unit,
+        analysisMetadata: String? = null,
+        analysisOverlayText: String? = null
+    ) {
         // TEMP DIAGNOSTIC — see isCapturingDiag's comment.
         Logger.w("CameraPreviewFragment", "capturePhoto() called, isCameraReady=$isCameraReady")
         if (!isCameraReady) {
@@ -1150,11 +1245,12 @@ class CameraPreviewFragment : CameraFragment() {
                     // now already matches the live preview as-is, with no
                     // extra transform needed here to keep them in sync.
                     // Step 2: write metadata into the temp file
-                    writeMetadata(path)
+                    writeVisibleAnalysisOverlay(path, analysisOverlayText)
+                    writeMetadata(path, analysisMetadata)
                     // Step 2: move to public Pictures/OpenTouch_<sensor>/ folder
                     val sensorFolder = currentSensorFolderName()
                     val fileName = generateFileName(sensorFolder)
-                    val finalPath = moveToPublicStorage(path, fileName, sensorFolder)
+                    val finalPath = moveToPublicStorage(path, fileName, sensorFolder, analysisMetadata)
                     // Step 3: delete the temp file regardless of outcome
                     try { File(path).delete() } catch (_: Exception) {}
 
@@ -1207,7 +1303,12 @@ class CameraPreviewFragment : CameraFragment() {
      * Android 10+: MediaStore API (no permission needed).
      * Android 9-: direct file copy (needs WRITE_EXTERNAL_STORAGE).
      */
-    private fun moveVideoToPublicStorage(tempPath: String, fileName: String, sensorFolder: String): String? {
+    private fun moveVideoToPublicStorage(
+        tempPath: String,
+        fileName: String,
+        sensorFolder: String,
+        analysisMetadata: String? = null
+    ): String? {
         val context = requireContext()
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -1215,6 +1316,9 @@ class CameraPreviewFragment : CameraFragment() {
                     put(MediaStore.Video.Media.DISPLAY_NAME, fileName)
                     put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
                     put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/OpenTouch_$sensorFolder")
+                    if (!analysisMetadata.isNullOrBlank()) {
+                        put(MediaStore.Video.VideoColumns.DESCRIPTION, analysisMetadata)
+                    }
                     put(MediaStore.Video.Media.IS_PENDING, 1)
                 }
                 val uri = context.contentResolver.insert(
@@ -1274,7 +1378,9 @@ class CameraPreviewFragment : CameraFragment() {
      */
     fun startVideoRecording(
         onStarted: () -> Unit,
-        onDone: RecordingCallback
+        onDone: RecordingCallback,
+        analysisMetadata: String? = null,
+        analysisOverlayText: String? = null
     ) {
         if (!isCameraReady) {
             onDone(false, "Camera is not ready yet")
@@ -1300,6 +1406,7 @@ class CameraPreviewFragment : CameraFragment() {
             return
         }
 
+        setVideoOverlayText(analysisOverlayText)
         captureVideoStart(object : ICaptureCallBack {
             override fun onBegin() {
                 // onBegin fires on the camera thread — bounce to main thread for UI.
@@ -1307,10 +1414,12 @@ class CameraPreviewFragment : CameraFragment() {
             }
 
             override fun onError(error: String?) {
+                setVideoOverlayText(null)
                 activity?.runOnUiThread { onDone(false, error ?: "Unknown recording error") }
             }
 
             override fun onComplete(path: String?) {
+                setVideoOverlayText(null)
                 activity?.runOnUiThread {
                     if (path == null) {
                         onDone(false, "Video was not saved (null path)")
@@ -1318,7 +1427,7 @@ class CameraPreviewFragment : CameraFragment() {
                     }
                     val sensorFolder = currentSensorFolderName()
                     val fileName = generateVideoFileName(sensorFolder)
-                    val finalPath = moveVideoToPublicStorage(path, fileName, sensorFolder)
+                    val finalPath = moveVideoToPublicStorage(path, fileName, sensorFolder, analysisMetadata)
                     try { File(path).delete() } catch (_: Exception) {}
 
                     if (finalPath != null) {
@@ -1338,6 +1447,10 @@ class CameraPreviewFragment : CameraFragment() {
      */
     fun stopVideoRecording() {
         captureVideoStop()
+    }
+
+    fun updateVideoOverlayText(text: String?) {
+        setVideoOverlayText(text)
     }
 
     private fun startPermissionOpenRetry(initialDelayMs: Long) {
@@ -1634,6 +1747,11 @@ class CameraPreviewFragment : CameraFragment() {
         private val _currentFps = mutableStateOf(0)
         val currentFps: State<Int> get() = _currentFps
 
+        // The preview size actually negotiated with the UVC device. This is
+        // what determines GL readback/live-analysis frame memory.
+        private val _currentPreviewSize = mutableStateOf<Pair<Int, Int>?>(null)
+        val currentPreviewSize: State<Pair<Int, Int>?> get() = _currentPreviewSize
+
         private val _isStreaming = mutableStateOf(false)
         val isStreaming: State<Boolean> get() = _isStreaming
 
@@ -1779,10 +1897,14 @@ class CameraPreviewFragment : CameraFragment() {
         fun supportedSizes(): List<PreviewSize> =
             activeInstance?.getSupportedSizes() ?: emptyList()
 
-        fun requestCapture(onDone: (success: Boolean, path: String?) -> Unit): Boolean {
+        fun requestCapture(
+            onDone: (success: Boolean, path: String?) -> Unit,
+            analysisMetadata: String? = null,
+            analysisOverlayText: String? = null
+        ): Boolean {
             val instance = activeInstance ?: return false
             if (!instance.isCameraReady) return false
-            instance.capturePhoto(onDone)
+            instance.capturePhoto(onDone, analysisMetadata, analysisOverlayText)
             return true
         }
 
@@ -1793,12 +1915,18 @@ class CameraPreviewFragment : CameraFragment() {
          */
         fun requestStartRecording(
             onStarted: () -> Unit,
-            onDone: RecordingCallback
+            onDone: RecordingCallback,
+            analysisMetadata: String? = null,
+            analysisOverlayText: String? = null
         ): Boolean {
             val instance = activeInstance ?: return false
             if (!instance.isCameraReady) return false
-            instance.startVideoRecording(onStarted, onDone)
+            instance.startVideoRecording(onStarted, onDone, analysisMetadata, analysisOverlayText)
             return true
+        }
+
+        fun requestVideoOverlayText(text: String?) {
+            activeInstance?.updateVideoOverlayText(text)
         }
 
         /** Stops the current recording. Does nothing if no recording is active. */

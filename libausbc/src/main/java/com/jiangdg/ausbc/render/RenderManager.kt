@@ -58,7 +58,8 @@ class RenderManager(
     context: Context,
     private val surfaceWidth: Int,         // render surface width
     private val surfaceHeight: Int,        // render surface height
-    private val mPreviewDataCbList: CopyOnWriteArrayList<IPreviewDataCallBack>?=null
+    private val mPreviewDataCbList: CopyOnWriteArrayList<IPreviewDataCallBack>?=null,
+    initialRotateType: RotateType? = null
 ) : SurfaceTexture.OnFrameAvailableListener, Handler.Callback {
     private var mPreviewByteBuffer: ByteBuffer? = null
     private var mEOSTextureId: Int? = null
@@ -75,6 +76,7 @@ class RenderManager(
     private var mWidth: Int = 0
     private var mHeight: Int = 0
     private var mFBOBufferId: Int = 0
+    private var mRotateType: RotateType? = initialRotateType
     private var mContext: Context = context
     private var mEffectList = arrayListOf<AbstractEffect>()
     private var mCacheEffectList = arrayListOf<AbstractEffect>()
@@ -82,6 +84,8 @@ class RenderManager(
     private var mFrameRate = 0
     private var mEndTime: Long = 0L
     private var mStartTime = System.currentTimeMillis()
+    @Volatile
+    private var mVideoOverlayText: String? = null
     private val mStFuture by lazy {
         SettableFuture<SurfaceTexture>()
     }
@@ -122,17 +126,12 @@ class RenderManager(
                     mScreenRender?.initGLES()
                     mCameraRender?.initGLES()
                     mCaptureRender?.initGLES()
-                    // Fixed at the REAL camera preview resolution (surfaceWidth/
-                    // surfaceHeight, passed into the constructor), not the
-                    // on-screen surface size (w/h above). Captures read their
-                    // width/height from this render's own size (see
-                    // saveImageInternal()), so this is what makes a saved photo
-                    // come out at the resolution the user actually selected
-                    // instead of whatever pixel size the preview widget happens
-                    // to be on screen. Deliberately NOT re-sized in
-                    // MSG_GL_CHANGED_SIZE below - only the on-screen renderers
-                    // should track that.
-                    mCaptureRender?.setSize(surfaceWidth, surfaceHeight)
+                    // Fixed at the real camera preview resolution, not the
+                    // on-screen surface size. When the preview is rotated by a
+                    // quarter turn, the saved/read-back frame must swap width
+                    // and height too; otherwise gallery images become landscape
+                    // while the app preview is portrait.
+                    mCaptureRender?.setSize(captureWidth(), captureHeight())
                     mEOSTextureId = mCameraRender?.getCameraTextureId()?.apply {
                         mStFuture.set(SurfaceTexture(this))
                     }
@@ -169,8 +168,16 @@ class RenderManager(
                 stopRenderCodecInternal()
             }
             MSG_GL_ROUTE_ANGLE -> {
-                (msg.obj as? RotateType)?.apply {
+                mRotateType = msg.obj as? RotateType
+                mRotateType?.apply {
                     mCameraRender?.setRotateAngle(this)
+                }
+                val width = captureWidth()
+                val height = captureHeight()
+                if (mCaptureRender?.getRenderWidth() != width ||
+                    mCaptureRender?.getRenderHeight() != height
+                ) {
+                    mCaptureRender?.setSize(width, height)
                 }
             }
             MSG_GL_DRAW -> {
@@ -365,6 +372,11 @@ class RenderManager(
         mRenderHandler?.obtainMessage(MSG_GL_STOP_RENDER_CODEC)?.sendToTarget()
     }
 
+    fun setVideoOverlayText(text: String?) {
+        mVideoOverlayText = text?.takeIf { it.isNotBlank() }
+        mRenderCodecHandler?.obtainMessage(MSG_GL_RENDER_CODEC_OVERLAY, mVideoOverlayText)?.sendToTarget()
+    }
+
     /**
      * Set render size
      *
@@ -449,6 +461,7 @@ class RenderManager(
                         mEncodeRender?.initEGLEvn(shareContext)
                         mEncodeRender?.setupSurface(inputSurface)
                         mEncodeRender?.initGLES()
+                        mEncodeRender?.setOverlayText(mVideoOverlayText)
                     }
                 }
                 MSG_GL_RENDER_CODEC_CHANGED_SIZE -> {
@@ -465,6 +478,10 @@ class RenderManager(
                         mEncodeRender?.drawFrame(textureId)
                         mEncodeRender?.swapBuffers(timeStamps)
                     }
+                }
+                MSG_GL_RENDER_CODEC_OVERLAY -> {
+                    mVideoOverlayText = message.obj as? String
+                    mEncodeRender?.setOverlayText(mVideoOverlayText)
                 }
                 MSG_GL_RENDER_CODEC_RELEASE -> {
                     mEncodeRender?.releaseGLES()
@@ -494,6 +511,15 @@ class RenderManager(
         mRenderCodecThread = null
         mRenderCodecHandler = null
     }
+
+    private fun isQuarterTurnRotation(): Boolean =
+        mRotateType == RotateType.ANGLE_90 || mRotateType == RotateType.ANGLE_270
+
+    private fun captureWidth(): Int =
+        if (isQuarterTurnRotation()) surfaceHeight else surfaceWidth
+
+    private fun captureHeight(): Int =
+        if (isQuarterTurnRotation()) surfaceWidth else surfaceHeight
 
     private fun saveImageInternal(savePath: String?) {
         if (mCaptureState.get()) {
@@ -622,5 +648,6 @@ class RenderManager(
         private const val MSG_GL_RENDER_CODEC_CHANGED_SIZE = 0x12
         private const val MSG_GL_RENDER_CODEC_DRAW = 0x13
         private const val MSG_GL_RENDER_CODEC_RELEASE = 0x14
+        private const val MSG_GL_RENDER_CODEC_OVERLAY = 0x15
     }
 }
