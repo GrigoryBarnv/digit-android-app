@@ -46,31 +46,53 @@ tasks.withType(JavaCompile) {
 	compileTask -> compileTask.dependsOn ndkBuild
 }
 
+String getSdkDir() {
+	def localPropertiesFile = project.rootProject.file('local.properties')
+	if (localPropertiesFile.exists()) {
+		Properties properties = new Properties()
+		localPropertiesFile.withInputStream { properties.load(it) }
+		def sdkDir = properties.getProperty("sdk.dir")
+		if (sdkDir != null && !sdkDir.isEmpty()) {
+			return sdkDir
+		}
+	}
+	def sdkDir = System.getenv("ANDROID_SDK_ROOT")
+	if (sdkDir == null || sdkDir.isEmpty()) {
+		sdkDir = System.getenv("ANDROID_HOME")
+	}
+	return sdkDir
+}
+
 String getNdkBuildPath() {
 	def ndkBuildingDir = System.getenv("NDK_HOME")
 	if (ndkBuildingDir == null || ndkBuildingDir.isEmpty()) {
 		ndkBuildingDir = System.getenv("ANDROID_NDK_HOME")
 	}
 
-	if (ndkBuildingDir == null || ndkBuildingDir.isEmpty()) {
-		def localPropertiesFile = project.rootProject.file('local.properties')
-		if (localPropertiesFile.exists()) {
-			Properties properties = new Properties()
-			localPropertiesFile.withInputStream { properties.load(it) }
-			ndkBuildingDir = properties.getProperty("ndk.dir")
+	def localPropertiesFile = project.rootProject.file('local.properties')
+	if ((ndkBuildingDir == null || ndkBuildingDir.isEmpty()) && localPropertiesFile.exists()) {
+		Properties properties = new Properties()
+		localPropertiesFile.withInputStream { properties.load(it) }
+		ndkBuildingDir = properties.getProperty("ndk.dir")
+	}
 
-			if ((ndkBuildingDir == null || ndkBuildingDir.isEmpty())) {
-				def sdkDir = properties.getProperty("sdk.dir")
-				if (sdkDir != null && !sdkDir.isEmpty()) {
-					def sdkFile = file(sdkDir)
-					def versionedNdkDir = new File(sdkFile, "ndk/${rootProject.ext.has('ndkVersion') ? rootProject.ext.ndkVersion : ''}")
-					if (versionedNdkDir.exists()) {
-						ndkBuildingDir = versionedNdkDir.absolutePath
-					} else {
-						def ndkBundleDir = new File(sdkFile, 'ndk-bundle')
-						if (ndkBundleDir.exists()) {
-							ndkBuildingDir = ndkBundleDir.absolutePath
-						}
+	if (ndkBuildingDir == null || ndkBuildingDir.isEmpty()) {
+		def sdkDir = getSdkDir()
+		if (sdkDir != null && !sdkDir.isEmpty()) {
+			def sdkFile = file(sdkDir)
+			def ndkVersion = rootProject.ext.has('ndkVersion') ? rootProject.ext.ndkVersion : ''
+			def versionedNdkDir = new File(sdkFile, "ndk/${ndkVersion}")
+			if (ndkVersion && versionedNdkDir.exists()) {
+				ndkBuildingDir = versionedNdkDir.absolutePath
+			} else {
+				def ndkRoot = new File(sdkFile, 'ndk')
+				def installedNdks = ndkRoot.exists() ? ndkRoot.listFiles()?.findAll { it.isDirectory() }?.sort { it.name } : null
+				if (installedNdks) {
+					ndkBuildingDir = installedNdks.last().absolutePath
+				} else {
+					def ndkBundleDir = new File(sdkFile, 'ndk-bundle')
+					if (ndkBundleDir.exists()) {
+						ndkBuildingDir = ndkBundleDir.absolutePath
 					}
 				}
 			}
@@ -89,15 +111,20 @@ String getNdkBuildPath() {
 }
 
 task ndkBuild(type: Exec, description: 'Compile JNI source via NDK') {
-	println('executing ndkBuild')
-	def ndkBuildPath = getNdkBuildPath();
-	commandLine ndkBuildPath, '-j8', '-C', file('src/main').absolutePath
+	// Placeholder so configuration succeeds before the NDK path is resolved.
+	commandLine Os.isFamily(Os.FAMILY_WINDOWS) ? ['cmd', '/c', 'exit', '0'] : ['true']
+	doFirst {
+		println('executing ndkBuild')
+		commandLine getNdkBuildPath(), '-j8', '-C', file('src/main').absolutePath
+	}
 }
 
 task ndkClean(type: Exec, description: 'clean JNI libraries') {
-	println('executing ndkBuild clean')
-	def ndkBuildPath = getNdkBuildPath();
-	commandLine ndkBuildPath, 'clean', '-C', file('src/main').absolutePath
+	commandLine Os.isFamily(Os.FAMILY_WINDOWS) ? ['cmd', '/c', 'exit', '0'] : ['true']
+	doFirst {
+		println('executing ndkBuild clean')
+		commandLine getNdkBuildPath(), 'clean', '-C', file('src/main').absolutePath
+	}
 }
 
 clean.dependsOn 'ndkClean'
