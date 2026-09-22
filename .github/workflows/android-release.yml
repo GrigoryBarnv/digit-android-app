@@ -22,19 +22,16 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Configure Android SDK
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-31'
+
+      - name: Write local.properties
         run: |
-          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
-          if [ ! -d "$SDK_ROOT" ]; then
-            echo "Android SDK not found at $SDK_ROOT"
-            exit 1
-          fi
-          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
-          mkdir -p "$SDK_ROOT/licenses"
-          echo "24333f8a63b6825ea9c5514f83c2829b004d1dc9" > "$SDK_ROOT/licenses/android-sdk-license"
-          echo "84831b9409646161cecb164bde4606c4" > "$SDK_ROOT/licenses/android-sdk-preview-license"
-          echo "sdk.dir=$SDK_ROOT" > local.properties
+          echo "ANDROID_HOME=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
+          echo "sdk.dir=${ANDROID_SDK_ROOT}" > local.properties
 
       - name: Set up NDK
         uses: nttld/setup-ndk@v1
