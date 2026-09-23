@@ -77,7 +77,13 @@ class CameraClient internal constructor(builder: Builder) : IPreviewDataCallBack
     private val mMainHandler: Handler = Handler(Looper.getMainLooper())
 
     private val mRenderManager: RenderManager? by lazy {
-        RenderManager(mCtx!!, mRequest!!.previewWidth, mRequest!!.previewHeight, null)
+        RenderManager(
+            mCtx!!,
+            mRequest!!.previewWidth,
+            mRequest!!.previewHeight,
+            null,
+            mDefaultRotateType
+        )
     }
 
     init {

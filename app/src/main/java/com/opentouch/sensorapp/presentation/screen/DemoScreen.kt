@@ -4,6 +4,8 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.net.Uri
 import android.view.View
 import android.widget.Toast
@@ -70,6 +72,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -77,6 +80,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -123,6 +127,7 @@ import com.opentouch.sensorapp.ml.LiveModelAnalyzer
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import com.opentouch.sensorapp.ml.ModelRepository
 import com.opentouch.sensorapp.ml.ModelRuntimeLoader
 import com.opentouch.sensorapp.ml.MlRuntimeInstaller
@@ -359,6 +364,9 @@ fun DemoScreen(
     val blue = remember { mutableFloatStateOf(0f) }
     var showRgbControls by remember { mutableStateOf(false) }
     var showFpsControls by remember { mutableStateOf(false) }
+    var showDeviceInfoPanel by remember { mutableStateOf(false) }
+    var showModelControls by remember { mutableStateOf(false) }
+    var addModelOutputToRecording by remember { mutableStateOf(false) }
     // Actual measured height of the bottom nav bar, so the RGB/FPS overlay
     // panels can sit just above it on any screen size instead of guessing a
     // fixed dp clearance - the bar's own size is responsive (scales with
@@ -391,6 +399,12 @@ fun DemoScreen(
     var analysisError by remember { mutableStateOf<String?>(null) }
     var analysisStatus by remember { mutableStateOf("Waiting for sensor") }
     var analysisDurationMs by remember { mutableStateOf<Long?>(null) }
+    var analysisUpdateSequence by remember { mutableIntStateOf(0) }
+    var modelSelectionMessage by remember { mutableStateOf<String?>(null) }
+    var modelSelectionMessageId by remember { mutableIntStateOf(0) }
+    val modelSelectionTone = remember {
+        ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80)
+    }
     val liveAnalyzer = remember { LiveModelAnalyzer() }
     val activeCamera by CameraPreviewFragment.activeInstanceState
     val cameraStreaming by CameraPreviewFragment.isStreaming
@@ -446,10 +460,20 @@ fun DemoScreen(
     DisposableEffect(liveAnalyzer) {
         onDispose { liveAnalyzer.close() }
     }
+    DisposableEffect(modelSelectionTone) {
+        onDispose { modelSelectionTone.release() }
+    }
+    LaunchedEffect(modelSelectionMessageId) {
+        if (modelSelectionMessage != null) {
+            delay(1_000L)
+            modelSelectionMessage = null
+        }
+    }
     LaunchedEffect(selectedModel, mlRuntimeState, activeCamera, cameraFragment, cameraStreaming, isResumed) {
         analysisResult = null
         analysisError = null
         analysisDurationMs = null
+        analysisUpdateSequence = 0
         val model = selectedModel ?: return@LaunchedEffect
         analysisStatus = when {
             mlRuntimeState == MlRuntimeState.DOWNLOADING -> "Downloading AI runtime..."
@@ -478,6 +502,7 @@ fun DemoScreen(
                 onPrediction = { result, durationMs ->
                     analysisResult = result
                     analysisDurationMs = durationMs
+                    analysisUpdateSequence += 1
                     analysisStatus = "Live"
                 }
             )
@@ -582,6 +607,7 @@ fun DemoScreen(
     }
     // Live-measured FPS coming from the camera fragment (read-only display).
     val currentFps = CameraPreviewFragment.currentFps.value
+    val currentPreviewSize = CameraPreviewFragment.currentPreviewSize.value
 
     // ── Photo: flash overlay ──────────────────────────────────────────────────
     var showFlash by remember { mutableStateOf(false) }
@@ -632,6 +658,26 @@ fun DemoScreen(
         return "%02d:%02d".format(m, s)
     }
 
+    fun formatRgbaFrameSize(width: Int, height: Int): String {
+        val bytes = width.toLong() * height.toLong() * 4L
+        val mib = bytes.toDouble() / (1024.0 * 1024.0)
+        return "%.1f MiB RGBA".format(mib)
+    }
+
+    fun latestAnalysisMetadata(): String? {
+        val model = selectedModel ?: return null
+        val result = analysisResult ?: return "OpenTouch AI model: ${model.displayName}; result: pending"
+        val confidence = (result.confidence * 100f).roundToInt()
+        val duration = analysisDurationMs?.let { "; inferenceMs: $it" } ?: ""
+        return "OpenTouch AI model: ${model.displayName}; result: ${result.label}; confidence: $confidence%$duration; capturedAtMs: ${System.currentTimeMillis()}"
+    }
+
+    fun latestAnalysisOverlayText(): String? {
+        val result = analysisResult ?: return null
+        val confidence = (result.confidence * 100f).roundToInt()
+        return "${result.label.replaceFirstChar { it.uppercase() }} $confidence%"
+    }
+
     // ── Capture button handler ────────────────────────────────────────────────
     fun onCaptureClicked() {
         if (isVideoMode) {
@@ -640,37 +686,59 @@ fun DemoScreen(
                     onStarted = { isRecording = true },
                     onDone = { success, path ->
                         isRecording = false
+                        CameraPreviewFragment.requestVideoOverlayText(null)
                         if (success) {
                             Toast.makeText(context, "Video saved!", Toast.LENGTH_SHORT).show()
                         } else {
                             Toast.makeText(context, "Recording failed: $path", Toast.LENGTH_SHORT).show()
                         }
-                    }
+                    },
+                    analysisMetadata = latestAnalysisMetadata(),
+                    analysisOverlayText = latestAnalysisOverlayText().takeIf { addModelOutputToRecording }
                 )
                 if (!started) {
                     Toast.makeText(context, "Camera not ready", Toast.LENGTH_SHORT).show()
                 }
             } else {
+                CameraPreviewFragment.requestVideoOverlayText(null)
                 CameraPreviewFragment.requestStopRecording()
             }
         } else {
             if (isCapturing) return
             isCapturing = true
 
-            val cameraReady = CameraPreviewFragment.requestCapture { success, path ->
-                isCapturing = false
-                if (success) {
-                    showFlash = true
-                    Toast.makeText(context, "Photo saved!", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(context, "Capture failed: $path", Toast.LENGTH_SHORT).show()
-                }
-            }
+            val cameraReady = CameraPreviewFragment.requestCapture(
+                onDone = { success, path ->
+                    isCapturing = false
+                    if (success) {
+                        showFlash = true
+                        Toast.makeText(context, "Photo saved!", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "Capture failed: $path", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                analysisMetadata = latestAnalysisMetadata(),
+                analysisOverlayText = latestAnalysisOverlayText().takeIf { addModelOutputToRecording }
+            )
             if (!cameraReady) {
                 isCapturing = false
                 Toast.makeText(context, "Camera not ready", Toast.LENGTH_SHORT).show()
             }
         }
+    }
+
+    LaunchedEffect(
+        isRecording,
+        addModelOutputToRecording,
+        analysisResult?.label,
+        analysisResult?.confidence
+    ) {
+        val overlayText = if (isRecording && addModelOutputToRecording) {
+            latestAnalysisOverlayText()
+        } else {
+            null
+        }
+        CameraPreviewFragment.requestVideoOverlayText(overlayText)
     }
 
     fun uiToLed(value: Float): Int {
@@ -816,6 +884,50 @@ fun DemoScreen(
                         )
                     }
                 }
+
+                if (selectedModel != null) {
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(horizontal = 16.dp, vertical = 16.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xDD202126),
+                        border = BorderStroke(1.dp, Color(0xFF594BA0))
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            when {
+                                analysisResult != null -> {
+                                    val result = analysisResult!!
+                                    key(analysisUpdateSequence) {
+                                        Text(
+                                            "${result.label.replaceFirstChar { it.uppercase() }} ${(result.confidence * 100f).roundToInt()}%",
+                                            color = Color.White,
+                                            fontSize = 18.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                                analysisError != null -> Text(
+                                    analysisError!!,
+                                    color = Color(0xFFFFB4AB),
+                                    fontSize = 13.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                                else -> Text(analysisStatus, color = Color.White, fontSize = 14.sp)
+                            }
+                            if (analysisResult != null && analysisError == null) {
+                                Text(
+                                    "Live В· ${analysisDurationMs ?: 0} ms",
+                                    color = Color.LightGray,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -955,12 +1067,7 @@ fun DemoScreen(
                     labelWidth = navLabelWidth,
                     onClick = {
                         if (!isRecording) {
-                            if (selectedModel != null) {
-                                selectedModel = null
-                                isVideoMode = false
-                            } else {
-                                isVideoMode = !isVideoMode
-                            }
+                            isVideoMode = !isVideoMode
                         }
                     }
                 )
@@ -1050,6 +1157,14 @@ fun DemoScreen(
                                         isVideoMode = false
                                         analysisResult = null
                                         analysisError = null
+                                        analysisUpdateSequence = 0
+                                        analysisDurationMs = null
+                                        modelSelectionMessage = "${model.displayName} selected"
+                                        modelSelectionMessageId += 1
+                                        modelSelectionTone.startTone(
+                                            ToneGenerator.TONE_PROP_ACK,
+                                            120
+                                        )
                                         showModelMenu = false
                                     }
                                 }
@@ -1153,6 +1268,8 @@ fun DemoScreen(
                                     selectedResolution.value = CameraPreviewFragment.targetResolution.value
                                     showSettingsMenu = false
                                     showRgbControls = false
+                                    showDeviceInfoPanel = false
+                                    showModelControls = false
                                     showFpsControls = true
                                 }
                             }
@@ -1172,6 +1289,8 @@ fun DemoScreen(
                                 onClick = {
                                     showSettingsMenu = false
                                     showFpsControls = false
+                                    showDeviceInfoPanel = false
+                                    showModelControls = false
                                     showRgbControls = true
                                 }
                             )
@@ -1186,6 +1305,20 @@ fun DemoScreen(
                         // now also serial) and its only real function — the
                         // ability to reject/disconnect an unrecognized sensor
                         // — as a menu item instead of a blocking dialog.
+                        DropdownMenuItem(
+                            text = { Text("Model controls", color = Color.White) },
+                            leadingIcon = { Icon(Icons.Filled.Memory, contentDescription = null, tint = Color.White) },
+                            onClick = {
+                                showSettingsMenu = false
+                                showRgbControls = false
+                                showFpsControls = false
+                                showDeviceInfoPanel = false
+                                showModelControls = true
+                            }
+                        )
+
+                        HorizontalDivider()
+
                         if (detectedDevice != null) {
                             DropdownMenuItem(
                                 text = {
@@ -1197,37 +1330,12 @@ fun DemoScreen(
                                     )
                                 },
                                 leadingIcon = { Icon(Icons.Filled.Info, contentDescription = null, tint = Color.White) },
-                                enabled = false,
-                                onClick = { }
-                            )
-                            Text(
-                                "Vendor ID: 0x%04X (%d)".format(detectedDevice.vendorId, detectedDevice.vendorId),
-                                fontSize = 12.sp,
-                                color = Color(0xFF9A9A9A),
-                                modifier = Modifier.padding(start = 48.dp, end = 12.dp, top = 4.dp, bottom = 4.dp)
-                            )
-                            Text(
-                                "Product ID: 0x%04X (%d)".format(detectedDevice.productId, detectedDevice.productId),
-                                fontSize = 12.sp,
-                                color = Color(0xFF9A9A9A),
-                                modifier = Modifier.padding(start = 48.dp, end = 12.dp, top = 4.dp, bottom = 4.dp)
-                            )
-                            if (!detectedDevice.serialNumber.isNullOrBlank()) {
-                                Text(
-                                    "Serial: ${detectedDevice.serialNumber}",
-                                    fontSize = 12.sp,
-                                    color = Color(0xFF9A9A9A),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.padding(start = 48.dp, end = 12.dp, top = 4.dp, bottom = 4.dp)
-                                )
-                            }
-                            DropdownMenuItem(
-                                text = { Text("Disconnect sensor", color = Color(0xFFE2504A)) },
-                                leadingIcon = { Icon(Icons.Filled.LinkOff, contentDescription = null, tint = Color(0xFFE2504A)) },
                                 onClick = {
                                     showSettingsMenu = false
-                                    CameraPreviewFragment.declineConnect()
+                                    showRgbControls = false
+                                    showFpsControls = false
+                                    showModelControls = false
+                                    showDeviceInfoPanel = true
                                 }
                             )
                         } else {
@@ -1300,11 +1408,10 @@ fun DemoScreen(
                 val ringGapSize = captureSize * 0.86f
                 val discSize = captureSize * 0.66f
 
-                if (selectedModel == null) {
-                    Box(
-                        modifier = Modifier.size(captureSize),
-                        contentAlignment = Alignment.Center
-                    ) {
+                Box(
+                    modifier = Modifier.size(captureSize),
+                    contentAlignment = Alignment.Center
+                ) {
                     if (isRecordingPulse) {
                         // Soft glow pulsing outward from the red disc.
                         Box(
@@ -1348,17 +1455,13 @@ fun DemoScreen(
                                 onCaptureClicked()
                             }
                     )
-                    }
-                } else {
-                    // Reserve the same row height while live results change.
-                    Spacer(modifier = Modifier.size(captureSize))
                 }
 
-                if (selectedModel != null) {
+                if (false && selectedModel != null) {
                     Surface(
                         modifier = Modifier
                             .align(Alignment.Center)
-                            .offset(y = 6.dp)
+                            .offset(y = -(captureSize * 0.78f))
                             .padding(horizontal = 16.dp),
                         shape = RoundedCornerShape(12.dp),
                         color = Color(0xDD202126),
@@ -1371,12 +1474,14 @@ fun DemoScreen(
                             when {
                                 analysisResult != null -> {
                                     val result = analysisResult!!
-                                    Text(
-                                        "${result.label.replaceFirstChar { it.uppercase() }} ${(result.confidence * 100f).roundToInt()}%",
-                                        color = Color.White,
-                                        fontSize = 18.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
+                                    key(analysisUpdateSequence) {
+                                        Text(
+                                            "${result.label.replaceFirstChar { it.uppercase() }} ${(result.confidence * 100f).roundToInt()}%",
+                                            color = Color.White,
+                                            fontSize = 18.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
                                 }
                                 analysisError != null -> Text(
                                     analysisError!!,
@@ -1479,6 +1584,136 @@ fun DemoScreen(
                                 hoveredElevation = 8.dp
                             )
                         ) { Text("Apply") }
+                    }
+                }
+            }
+        }
+
+        if (showDeviceInfoPanel && detectedDevice != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { showDeviceInfoPanel = false }
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(bottom = bottomBarHeight + 12.dp)
+                    .background(Color(0xFF262626), RoundedCornerShape(12.dp))
+                    .border(1.dp, Color(0xFF3D3D3D), RoundedCornerShape(12.dp))
+                    .padding(12.dp)
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        "Device: ${matchedSensor?.shortName ?: detectedDevice.name}",
+                        color = Color.White,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        "Vendor ID: 0x%04X (%d)".format(detectedDevice.vendorId, detectedDevice.vendorId),
+                        fontSize = 12.sp,
+                        color = Color(0xFFBDBDBD)
+                    )
+                    Text(
+                        "Product ID: 0x%04X (%d)".format(detectedDevice.productId, detectedDevice.productId),
+                        fontSize = 12.sp,
+                        color = Color(0xFFBDBDBD),
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                    currentPreviewSize?.let { (width, height) ->
+                        Text(
+                            "Stream: ${width}x${height} (${formatRgbaFrameSize(width, height)})",
+                            fontSize = 12.sp,
+                            color = Color(0xFFBDBDBD),
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                    if (!detectedDevice.serialNumber.isNullOrBlank()) {
+                        Text(
+                            "Serial: ${detectedDevice.serialNumber}",
+                            fontSize = 12.sp,
+                            color = Color(0xFFBDBDBD),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { showDeviceInfoPanel = false },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF5E5D62), contentColor = Color.White)
+                        ) { Text("Close") }
+
+                        Button(
+                            onClick = {
+                                showDeviceInfoPanel = false
+                                CameraPreviewFragment.declineConnect()
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE2504A), contentColor = Color.White)
+                        ) { Text("Disconnect") }
+                    }
+                }
+            }
+        }
+
+        if (showModelControls) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { showModelControls = false }
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(bottom = bottomBarHeight + 12.dp)
+                    .background(Color(0xFF262626), RoundedCornerShape(12.dp))
+                    .border(1.dp, Color(0xFF3D3D3D), RoundedCornerShape(12.dp))
+                    .padding(12.dp)
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text("Model controls", color = Color.White, fontWeight = FontWeight.Medium)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Add model output to recording", color = Color.White)
+                            Text(
+                                if (addModelOutputToRecording) {
+                                    "On: saved photos include the visible model result; videos keep metadata."
+                                } else {
+                                    "Off: saved media keeps model output only as metadata."
+                                },
+                                fontSize = 11.sp,
+                                color = Color(0xFF9A9A9A),
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                        Switch(
+                            checked = addModelOutputToRecording,
+                            onCheckedChange = { addModelOutputToRecording = it }
+                        )
                     }
                 }
             }
@@ -1594,6 +1829,30 @@ fun DemoScreen(
         }
 
         // ── Gallery app bottom sheet ────────────────────────────────────────
+        modelSelectionMessage?.let { message ->
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(horizontal = 24.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = Color(0xEE594BA0),
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.35f)),
+                    shadowElevation = 12.dp
+                ) {
+                    Text(
+                        message,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        }
+
         if (galleryApps.isNotEmpty()) {
             ModalBottomSheet(
                 onDismissRequest = { galleryApps = emptyList() },

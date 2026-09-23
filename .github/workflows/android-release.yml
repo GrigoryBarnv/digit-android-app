@@ -10,23 +10,41 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-31'
 
-      - name: Install CMake 3.10.2
-        run: sdkmanager --install "cmake;3.10.2.4988404"
+      - name: Write local.properties
+        run: |
+          echo "ANDROID_HOME=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
+          echo "sdk.dir=${ANDROID_SDK_ROOT}" > local.properties
+
+      - name: Set up NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27
+          add-to-path: false
+          link-to-sdk: true
+
+      - name: Export NDK path
+        run: |
+          echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
+          echo "NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -34,8 +52,8 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
-      - name: Build release APK
-        run: ./gradlew :app:assembleRelease --stacktrace
+      - name: Build debug and release APKs
+        run: ./gradlew :app:assembleDebug :app:assembleRelease --stacktrace
 
       - name: Read app version
         id: app_version
@@ -43,13 +61,21 @@ jobs:
           VERSION_NAME=$(./gradlew -q :app:printVersionName --console=plain | tail -n 1 | tr -d '\r')
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
 
-      - name: Rename APK with version
+      - name: Rename APKs with version
         run: |
-          APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
-          VERSIONED_APK="app/build/outputs/apk/release/OpenTouch-v${{ steps.app_version.outputs.version_name }}.apk"
-          LATEST_APK="app/build/outputs/apk/release/OpenTouch-latest.apk"
-          cp "$APK_PATH" "$VERSIONED_APK"
-          cp "$APK_PATH" "$LATEST_APK"
+          mkdir -p app/build/outputs/apk/release
+          DEBUG_APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+          RELEASE_APK=$(find app/build/outputs/apk/release -name "*.apk" ! -name "OpenTouch-*" | head -n 1)
+          if [ -z "$DEBUG_APK" ]; then
+            echo "Debug APK not found"
+            find app/build/outputs -name "*.apk" -o -name "*.aab" | sort
+            exit 1
+          fi
+          cp "$DEBUG_APK" "app/build/outputs/apk/release/OpenTouch-v${{ steps.app_version.outputs.version_name }}-debug.apk"
+          if [ -n "$RELEASE_APK" ]; then
+            cp "$RELEASE_APK" "app/build/outputs/apk/release/OpenTouch-v${{ steps.app_version.outputs.version_name }}.apk"
+            cp "$RELEASE_APK" "app/build/outputs/apk/release/OpenTouch-latest.apk"
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

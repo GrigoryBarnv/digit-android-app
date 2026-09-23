@@ -33,9 +33,8 @@ data class ResolutionFpsOption(
  * Verified specs:
  *   DIGIT        : QVGA 320x240 @ 60/30 fps, VGA 640x480 @ 30/15 fps
  *                  (Meta's official digit-interface DigitDefaults)
- *   GelSight Mini: ~320x240 @ 25 fps  (datasheet: 8MP cam, 25 FPS; streams a
- *                                      downsampled image — exact live size is
- *                                      best read from the device at runtime)
+ *   GelSight Mini: 1920x1080 @ 25 fps (observed full-HD UVC stream; one RGBA
+ *                                      frame is about 8.3 MB after GL readback)
  */
 data class SupportedSensor(
     val displayName: String,
@@ -124,14 +123,14 @@ object SupportedSensors {
             productIds = setOf(0x636D),   // R0B (28BJ-5HLX). Add future revision PIDs here.
             nameFragment = "gelsight",
             maxFps = 25,           // GelSight Mini: 25 FPS (datasheet)
-            nativeWidth = 320,     // streams a downsampled image (~320x240);
-            nativeHeight = 240,    // verify against getAllPreviewSizes() at runtime
+            nativeWidth = 1920,    // Full-HD UVC stream. 1920*1080*4 = about 8.3 MB RGBA.
+            nativeHeight = 1080,
             folderName = "GelSightMini",
-            // Only the datasheet max-fps combo is verified so far - no unit to
-            // test against yet. resolutionOptionsForFps() falls back to this
-            // native size at other fps steps until real combos are measured.
+            // GelSight Mini advertises a full-HD UVC stream. The app reports
+            // this explicitly because one RGBA frame is about 8 MB after GL
+            // readback, even though the sensor spec mentions an 8MP camera.
             resolutionFpsOptions = listOf(
-                ResolutionFpsOption(320, 240, 25),
+                ResolutionFpsOption(1920, 1080, 25),
             ),
         ),
         SupportedSensor(

@@ -458,6 +458,10 @@ abstract class CameraFragment : BaseFragment(), ICameraStateCallBack {
         getCurrentCamera()?.captureVideoStart(callBack, path, durationInSec)
     }
 
+    protected fun setVideoOverlayText(text: String?) {
+        getCurrentCamera()?.setVideoOverlayText(text)
+    }
+
     /**
      * Capture video stop
      */
