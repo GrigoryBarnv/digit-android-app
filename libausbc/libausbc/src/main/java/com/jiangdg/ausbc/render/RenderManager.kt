@@ -109,9 +109,6 @@ class RenderManager(
      * Note: EGL must be initialized first, otherwise GL cannot run
      */
     override fun handleMessage(msg: Message): Boolean {
-        val frameProductionDelayMillis = 35 // Adjust the delay as needed
-        Thread.sleep(frameProductionDelayMillis.toLong())
-        Logger.i(TAG,"buffer3")
         when (msg.what) {
             MSG_GL_INIT -> {
                 (msg.obj as Triple<*, *, *>).apply {
