@@ -8,12 +8,6 @@ import android.hardware.usb.UsbManager
 import android.content.Context
 import android.content.ContentValues
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.RectF
 import android.media.MediaScannerConnection
 import android.os.Build
 import android.os.Environment
@@ -991,91 +985,53 @@ class CameraPreviewFragment : CameraFragment() {
     }
 
     /**
-     * Writes EXIF metadata (date/time + camera ID) into the photo file.
-     * Called on the temp file before moving it to public storage.
-     * If this fails, the photo is still saved — metadata failure is never fatal.
+     * Writes capture time and the live AI result into the JPEG EXIF tags.
+     * Photos keep the pixels unchanged; the model output lives in metadata.
+     * Failure is never fatal — the image is still saved.
      */
-    private fun writeMetadata(path: String, analysisMetadata: String? = null) {
+    private fun writePhotoExif(path: String, analysisMetadata: String? = null) {
         try {
-            val exif = ExifInterface(path)
-            val exifDate = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).format(Date())
-            exif.setAttribute(ExifInterface.TAG_DATETIME, exifDate)
-            exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, exifDate)
-            // Which camera took this photo — important for future multi-camera support.
-            val description = buildString {
-                append("Camera: $cameraId")
-                if (!analysisMetadata.isNullOrBlank()) {
-                    append('\n')
-                    append(analysisMetadata)
+            if (path.startsWith("content://")) {
+                requireContext().contentResolver.openFileDescriptor(
+                    android.net.Uri.parse(path),
+                    "rw"
+                )?.use { pfd ->
+                    applyPhotoExif(ExifInterface(pfd.fileDescriptor), analysisMetadata)
                 }
+            } else {
+                applyPhotoExif(ExifInterface(path), analysisMetadata)
             }
-            exif.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, description)
-            exif.saveAttributes()
-            Logger.i("CameraPreviewFragment", "writeMetadata: saved for $path, camera=$cameraId")
         } catch (e: Exception) {
-            Logger.e("CameraPreviewFragment", "writeMetadata failed: ${e.message}")
+            Logger.e("CameraPreviewFragment", "writePhotoExif failed: ${e.message}")
         }
     }
 
-    private fun writeVisibleAnalysisOverlay(path: String, analysisOverlayText: String?) {
-        if (analysisOverlayText.isNullOrBlank()) return
+    private fun writePhotoExif(uri: android.net.Uri, analysisMetadata: String? = null) {
         try {
-            val source = BitmapFactory.decodeFile(path) ?: return
-            val bitmap = source.copy(Bitmap.Config.ARGB_8888, true)
-            if (bitmap !== source) source.recycle()
-
-            val canvas = Canvas(bitmap)
-            val minSide = minOf(bitmap.width, bitmap.height).toFloat()
-            val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.WHITE
-                textSize = minOf(maxOf(minSide * 0.045f, 11f), 18f)
-                typeface = android.graphics.Typeface.create(
-                    android.graphics.Typeface.DEFAULT,
-                    android.graphics.Typeface.BOLD
-                )
+            requireContext().contentResolver.openFileDescriptor(uri, "rw")?.use { pfd ->
+                applyPhotoExif(ExifInterface(pfd.fileDescriptor), analysisMetadata)
             }
-            val padding = maxOf(minSide * 0.025f, 6f)
-            val margin = maxOf(minSide * 0.035f, 8f)
-            val maxTextWidth = bitmap.width.toFloat() - margin * 2f - padding * 2f
-            val visibleChars = textPaint.breakText(
-                analysisOverlayText,
-                true,
-                maxTextWidth,
-                null
-            ).coerceIn(0, analysisOverlayText.length)
-            val overlayText = if (visibleChars < analysisOverlayText.length && visibleChars > 1) {
-                "${analysisOverlayText.take(visibleChars - 1)}…"
-            } else {
-                analysisOverlayText
-            }
-            val textWidth = textPaint.measureText(overlayText)
-            val textHeight = textPaint.fontMetrics.run { bottom - top }
-            val left = margin
-            val bottom = bitmap.height - margin
-            val rect = RectF(
-                left,
-                bottom - textHeight - padding * 2f,
-                (left + textWidth + padding * 2f).coerceAtMost(bitmap.width - margin),
-                bottom
-            )
-            Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.argb(210, 32, 33, 38)
-            }.also { backgroundPaint ->
-                canvas.drawRoundRect(rect, padding, padding, backgroundPaint)
-            }
-            canvas.drawText(
-                overlayText,
-                rect.left + padding,
-                rect.bottom - padding - textPaint.fontMetrics.bottom,
-                textPaint
-            )
-            File(path).outputStream().use { output ->
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 95, output)
-            }
-            bitmap.recycle()
         } catch (e: Exception) {
-            Logger.e("CameraPreviewFragment", "writeVisibleAnalysisOverlay failed: ${e.message}")
+            Logger.e("CameraPreviewFragment", "writePhotoExif uri failed: ${e.message}")
         }
+    }
+
+    private fun applyPhotoExif(exif: ExifInterface, analysisMetadata: String?) {
+        val exifDate = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).format(Date())
+        exif.setAttribute(ExifInterface.TAG_DATETIME, exifDate)
+        exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, exifDate)
+        exif.setAttribute(ExifInterface.TAG_SOFTWARE, "OpenTouch")
+        val description = buildString {
+            append("Camera: $cameraId")
+            if (!analysisMetadata.isNullOrBlank()) {
+                append('\n')
+                append(analysisMetadata)
+            }
+        }
+        exif.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, description)
+        exif.setAttribute(ExifInterface.TAG_USER_COMMENT, description)
+        exif.saveAttributes()
+        Logger.i("CameraPreviewFragment", "writePhotoExif: camera=$cameraId")
     }
 
     /**
@@ -1101,9 +1057,6 @@ class CameraPreviewFragment : CameraFragment() {
                     put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
                     put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
                     put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/OpenTouch_$sensorFolder")
-                    if (!analysisMetadata.isNullOrBlank()) {
-                        put(MediaStore.Images.ImageColumns.DESCRIPTION, analysisMetadata)
-                    }
                     // IS_PENDING = 1 means "I'm still writing this file, don't show it yet."
                     // We set it to 0 after the copy is done so the gallery shows it properly.
                     put(MediaStore.Images.Media.IS_PENDING, 1)
@@ -1125,6 +1078,7 @@ class CameraPreviewFragment : CameraFragment() {
                         File(tempPath).inputStream().use { input -> input.copyTo(output) }
                     }
                 }
+                writePhotoExif(uri, analysisMetadata)
 
                 // Mark file as complete — gallery will now show it
                 contentValues.clear()
@@ -1156,6 +1110,7 @@ class CameraPreviewFragment : CameraFragment() {
                 }
                 val destFile = File(destDir, fileName)
                 File(tempPath).copyTo(destFile, overwrite = true)
+                writePhotoExif(destFile.absolutePath, analysisMetadata)
                 // Tell the gallery app to scan and show this new file.
                 MediaScannerConnection.scanFile(
                     context, arrayOf(destFile.absolutePath), arrayOf("image/jpeg"), null
@@ -1175,7 +1130,7 @@ class CameraPreviewFragment : CameraFragment() {
      * Flow:
      *  1. Check storage permission on Android 9 and below
      *  2. Save to a temp private file (always accessible, no permission needed)
-     *  3. Write EXIF metadata to the temp file
+     *  3. Write the AI result into the JPEG EXIF tags
      *  4. Move temp file to Pictures/OpenTouch_<sensor>/ using the correct method for the Android version
      *  5. Delete the temp file
      *
@@ -1185,8 +1140,7 @@ class CameraPreviewFragment : CameraFragment() {
      */
     fun capturePhoto(
         onDone: (success: Boolean, path: String?) -> Unit,
-        analysisMetadata: String? = null,
-        analysisOverlayText: String? = null
+        analysisMetadata: String? = null
     ) {
         // TEMP DIAGNOSTIC — see isCapturingDiag's comment.
         Logger.w("CameraPreviewFragment", "capturePhoto() called, isCameraReady=$isCameraReady")
@@ -1244,9 +1198,9 @@ class CameraPreviewFragment : CameraFragment() {
                     // produced a mirror image), so the raw captured bitmap
                     // now already matches the live preview as-is, with no
                     // extra transform needed here to keep them in sync.
-                    // Step 2: write metadata into the temp file
-                    writeVisibleAnalysisOverlay(path, analysisOverlayText)
-                    writeMetadata(path, analysisMetadata)
+                    // Photos keep the original pixels. The live AI result is
+                    // stored only in EXIF (ImageDescription + UserComment).
+                    writePhotoExif(path, analysisMetadata)
                     // Step 2: move to public Pictures/OpenTouch_<sensor>/ folder
                     val sensorFolder = currentSensorFolderName()
                     val fileName = generateFileName(sensorFolder)
@@ -1899,12 +1853,11 @@ class CameraPreviewFragment : CameraFragment() {
 
         fun requestCapture(
             onDone: (success: Boolean, path: String?) -> Unit,
-            analysisMetadata: String? = null,
-            analysisOverlayText: String? = null
+            analysisMetadata: String? = null
         ): Boolean {
             val instance = activeInstance ?: return false
             if (!instance.isCameraReady) return false
-            instance.capturePhoto(onDone, analysisMetadata, analysisOverlayText)
+            instance.capturePhoto(onDone, analysisMetadata)
             return true
         }
 

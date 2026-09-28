@@ -40,20 +40,23 @@ Train
     --images-per-class 100 `
     --epochs 15
 
-Export ONNX and create the Android package
-------------------------------------------
+Export ONNX
+-----------
 
-  .\.max-model-venv\Scripts\python.exe model_max_model\export_model.py --package
+  .\.max-model-venv\Scripts\python.exe model_max_model\export_model.py
 
 The files are written to model_max_model\output\:
 
   max_model.onnx
   model_config.json
-  max_model.opentouchmodel
 
-Import max_model.opentouchmodel into OpenTouch with the AI model import action.
-The package contains model.onnx and model.json, which the Android app extracts
-into its private model directory.
+Package them as a zip for OpenTouch:
+
+  .\tools\package-opentouch-model.ps1 `
+    -ModelPath .\model_max_model\output\max_model.onnx `
+    -ConfigPath .\model_max_model\output\model_config.json
+
+Ready-to-import zips are also in zipped_models\.
 
 More images
 -----------

@@ -4,6 +4,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- WRITE_EXTERNAL_STORAGE is only needed on Android 9 and below.
          On Android 10+, MediaStore API is used instead which needs no permission. -->
@@ -47,7 +48,7 @@
         android:theme="@style/Theme.Digitapp">
 
         <activity
-            android:name=".presentation.activity.MainActivity"
+            android:name="com.opentouch.sensorapp.presentation.activity.MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"
@@ -72,19 +73,15 @@
                 <data android:mimeType="application/x-onnx" />
                 <data android:mimeType="application/octet-stream" />
             </intent-filter>
-            <!-- Single-file OpenTouch model packages contain the ONNX model and
-                 its JSON configuration together. -->
+            <!-- A downloaded zip with model.onnx + model.json opens in the app. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:mimeType="application/vnd.opentouch.model" />
-                <data
-                    android:mimeType="application/octet-stream"
-                    android:pathPattern=".*\\.opentouchmodel" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip" />
+                <data android:mimeType="application/x-zip-compressed" />
             </intent-filter>
-            <!-- Some download providers report only */* instead of the custom
-                 MIME type. Match the filename for both URI schemes as well. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -92,7 +89,7 @@
                 <data
                     android:scheme="content"
                     android:mimeType="*/*"
-                    android:pathPattern=".*\\.opentouchmodel" />
+                    android:pathPattern=".*\\.zip" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -101,15 +98,15 @@
                 <data
                     android:scheme="file"
                     android:mimeType="*/*"
-                    android:pathPattern=".*\\.opentouchmodel" />
+                    android:pathPattern=".*\\.zip" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="application/vnd.opentouch.model" />
-                <data android:mimeType="application/octet-stream" />
                 <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip" />
                 <data android:mimeType="application/x-zip-compressed" />
+                <data android:mimeType="application/octet-stream" />
             </intent-filter>
         </activity>
     </application>

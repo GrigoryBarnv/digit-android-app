@@ -35,38 +35,35 @@ The Android app does not bundle model files in the APK. At runtime it creates
 an app-owned model directory at:
 
 ```text
-Android/data/com.opentouch.sensorapp/files/models/
+Android/data/com.opentouch.android/files/models/
 ```
 
-The AI menu's **Import model files** action copies selected files into that
-directory. Each ONNX model needs a matching JSON configuration file with the
-same base name, for example:
+The AI menu can **Download key_finger** and **Download max_model** over HTTPS
+without leaving the app. Those buttons fetch the zip from the website, then
+unpack it into the model directory. Direct zip URLs live in
+`RemoteModels.kt` — change them if the files move.
 
-- `key_finger.onnx` - trained two-class model
-- `key_finger.json` - input size, RGB normalization, and output labels
+**Import model files** still copies a zip (or separate `.onnx` + `.json`) from
+storage. A model always needs both files:
 
-The app does not bundle or generate a model automatically. Downloaded models
-must include their matching JSON configuration. This keeps large model files
-independent from APK releases and avoids storage permissions because the
-directory is app-owned. Models remain when the app is updated, so they can be
-reused; the AI menu provides a delete button for removing a model and its JSON.
-The model folder is excluded from Android backup and device transfer, so an
-uninstall followed by a fresh install does not restore the old models.
+- `.onnx` - the trained network
+- `.json` - input size, RGB normalization, and output labels
 
-For a more comfortable one-download flow, package the files as
-`<model-name>.opentouchmodel`. This is a ZIP-based OpenTouch package containing
-`model.onnx` and `model.json`. The app is
-registered as an Android file handler for this extension, so tapping the
-download can open OpenTouch and extract the files automatically. Create a
-package with:
+The app cannot run from the ONNX file alone, because the JSON supplies the
+class names and the image size the model was trained with. JSON alone also
+cannot run, because it has no network weights.
+
+For a one-download flow, put both files in a normal zip named
+`<model-name>.zip`, preferably as `model.onnx` and `model.json`. The app is
+registered as a zip handler, so tapping the download can open OpenTouch and
+extract the files automatically. Ready-to-import packages are in
+`zipped_models/`. Create a zip with:
 
 ```powershell
 .\tools\package-opentouch-model.ps1 `
   -ModelPath .\model_key_finger\output\key_finger.onnx `
-  -ConfigPath .\path\to\key_finger.json
+  -ConfigPath .\model_key_finger\output\model_config.json
 ```
-
-The configuration is required, including for `key_finger.onnx`.
 
 ONNX Runtime is delivered separately in the `mlruntime` dynamic feature
 module. The app requests this signed module on first launch; Google Play

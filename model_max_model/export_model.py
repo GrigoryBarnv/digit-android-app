@@ -1,11 +1,9 @@
-"""Export max_model to ONNX and create the OpenTouch import package."""
+"""Export max_model to ONNX for OpenTouch."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import subprocess
-import sys
 from pathlib import Path
 
 import torch
@@ -28,7 +26,6 @@ class MaxModelOutput(nn.Module):
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export max_model for OpenTouch.")
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).parent / "output")
-    parser.add_argument("--package", action="store_true", help="Also create max_model.opentouchmodel")
     return parser.parse_args()
 
 
@@ -74,24 +71,6 @@ def main() -> None:
     config["output_type"] = "logits"
     config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
     print(f"Exported {onnx_path}")
-
-    if args.package:
-        converter = Path(__file__).parents[1] / "model_converter" / "convert_model.py"
-        package_path = args.output_dir / "max_model.opentouchmodel"
-        subprocess.run(
-            [
-                sys.executable,
-                str(converter),
-                "--model",
-                str(onnx_path),
-                "--config",
-                str(config_path),
-                "--output",
-                str(package_path),
-                "--force",
-            ],
-            check=True,
-        )
 
 
 if __name__ == "__main__":

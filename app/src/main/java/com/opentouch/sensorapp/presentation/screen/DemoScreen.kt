@@ -48,6 +48,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LinkOff
@@ -128,8 +129,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import com.opentouch.sensorapp.ml.CatalogModel
+import com.opentouch.sensorapp.ml.ModelDownloader
 import com.opentouch.sensorapp.ml.ModelRepository
 import com.opentouch.sensorapp.ml.ModelRuntimeLoader
+import com.opentouch.sensorapp.ml.RemoteModels
 import com.opentouch.sensorapp.ml.MlRuntimeInstaller
 import com.opentouch.sensorapp.ml.MlRuntimeState
 import com.opentouch.sensorapp.ml.StoredModel
@@ -395,6 +399,7 @@ fun DemoScreen(
     var selectedModel by remember { mutableStateOf<StoredModel?>(null) }
     var showModelMenu by remember { mutableStateOf(false) }
     var modelPendingDeletion by remember { mutableStateOf<StoredModel?>(null) }
+    var downloadingModelId by remember { mutableStateOf<String?>(null) }
     var analysisResult by remember { mutableStateOf<ModelPrediction?>(null) }
     var analysisError by remember { mutableStateOf<String?>(null) }
     var analysisStatus by remember { mutableStateOf("Waiting for sensor") }
@@ -439,11 +444,11 @@ fun DemoScreen(
             availableModels = withContext(Dispatchers.IO) {
                 ModelRepository.listModels(context)
             }
-            Toast.makeText(context, "ONNX model imported", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Model imported", Toast.LENGTH_SHORT).show()
         } catch (error: Exception) {
             Toast.makeText(
                 context,
-                error.message ?: "Could not import ONNX model",
+                error.message ?: "Could not import model",
                 Toast.LENGTH_LONG
             ).show()
         } finally {
@@ -544,6 +549,31 @@ fun DemoScreen(
     fun requestModelDeletion(model: StoredModel) {
         showModelMenu = false
         modelPendingDeletion = model
+    }
+
+    fun downloadCatalogModel(model: CatalogModel) {
+        if (downloadingModelId != null) return
+        showModelMenu = false
+        downloadingModelId = model.id
+        analysisScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    ModelDownloader.downloadAndImport(context, model)
+                }
+                availableModels = withContext(Dispatchers.IO) {
+                    ModelRepository.listModels(context)
+                }
+                Toast.makeText(context, "${model.title} downloaded", Toast.LENGTH_SHORT).show()
+            } catch (error: Exception) {
+                Toast.makeText(
+                    context,
+                    error.message ?: "Could not download ${model.title}",
+                    Toast.LENGTH_LONG
+                ).show()
+            } finally {
+                downloadingModelId = null
+            }
+        }
     }
 
     fun deletePendingModel() {
@@ -717,8 +747,7 @@ fun DemoScreen(
                         Toast.makeText(context, "Capture failed: $path", Toast.LENGTH_SHORT).show()
                     }
                 },
-                analysisMetadata = latestAnalysisMetadata(),
-                analysisOverlayText = latestAnalysisOverlayText().takeIf { addModelOutputToRecording }
+                analysisMetadata = latestAnalysisMetadata()
             )
             if (!cameraReady) {
                 isCapturing = false
@@ -1178,6 +1207,30 @@ fun DemoScreen(
                             )
                         }
                         HorizontalDivider(color = Color(0xFF3D3D3D))
+                        RemoteModels.catalog.forEach { catalogModel ->
+                            val downloading = downloadingModelId == catalogModel.id
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (downloading) {
+                                            "Downloading ${catalogModel.title}..."
+                                        } else {
+                                            "Download ${catalogModel.title}"
+                                        },
+                                        color = Color.White
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Filled.Download,
+                                        contentDescription = null,
+                                        tint = Color.White
+                                    )
+                                },
+                                enabled = downloadingModelId == null,
+                                onClick = { downloadCatalogModel(catalogModel) }
+                            )
+                        }
                         DropdownMenuItem(
                             text = { Text("Import model files", color = Color.White) },
                             leadingIcon = { Icon(Icons.Filled.Add, contentDescription = null, tint = Color.White) },
@@ -1701,9 +1754,9 @@ fun DemoScreen(
                             Text("Add model output to recording", color = Color.White)
                             Text(
                                 if (addModelOutputToRecording) {
-                                    "On: saved photos include the visible model result; videos keep metadata."
+                                    "On: videos burn the live result into the frames. Photos always store it in EXIF."
                                 } else {
-                                    "Off: saved media keeps model output only as metadata."
+                                    "Off: videos stay unchanged. Photos still store the result in EXIF metadata."
                                 },
                                 fontSize = 11.sp,
                                 color = Color(0xFF9A9A9A),
@@ -2031,7 +2084,7 @@ fun DemoScreen(
                                     context.startActivity(
                                         Intent(
                                             Intent.ACTION_VIEW,
-                                            Uri.parse("https://lasr-lab.github.io/opentouch.org/webpage/")
+                                            Uri.parse("https://opentouch.org/mobile/")
                                         )
                                     )
                                 }

@@ -6,6 +6,7 @@ import android.provider.OpenableColumns
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
 import java.util.Locale
 import java.util.zip.ZipInputStream
 
@@ -22,7 +23,7 @@ data class StoredModel(
 /** Owns model files kept outside the APK so they can be imported or downloaded independently. */
 object ModelRepository {
     private const val DIRECTORY_NAME = "models"
-    private const val PACKAGE_EXTENSION = "opentouchmodel"
+    private const val PACKAGE_EXTENSION = "zip"
     private const val PACKAGE_MODEL_ENTRY = "model.onnx"
     private const val PACKAGE_CONFIG_ENTRY = "model.json"
     private const val MAX_PACKAGE_ENTRY_BYTES = 1024L * 1024L * 1024L
@@ -59,11 +60,11 @@ object ModelRepository {
             .trim('_')
             .take(120)
         val extension = safeName.substringAfterLast('.', "").lowercase(Locale.US)
-        if (extension == PACKAGE_EXTENSION) {
+        if (extension == PACKAGE_EXTENSION || (extension.isEmpty() && looksLikeZip(context, uri))) {
             return importPackage(context, uri, safeName, directory)
         }
         require(extension == "onnx" || extension == "json") {
-            "Only .onnx, .json, or .opentouchmodel files can be imported"
+            "Only .zip, .onnx, or .json files can be imported"
         }
         require(safeName.isNotBlank() && safeName != ".") { "The selected file has no usable name" }
 
@@ -83,6 +84,14 @@ object ModelRepository {
         return target
     }
 
+    /** Extracts a zip that was downloaded into a local file. */
+    fun importZipFile(context: Context, zipFile: File, packageName: String = zipFile.name): File {
+        require(zipFile.isFile && zipFile.length() > 0L) { "The downloaded zip is empty" }
+        return zipFile.inputStream().use { input ->
+            importPackageFromStream(input, packageName, modelsDirectory(context))
+        }
+    }
+
     /** Deletes the selected model and its matching configuration file. */
     fun deleteModel(context: Context, model: StoredModel) {
         val directory = modelsDirectory(context).canonicalFile
@@ -99,15 +108,26 @@ object ModelRepository {
         }
     }
 
-    /** Extracts a single downloaded package containing model.onnx and model.json. */
+    /** Extracts a downloaded zip containing one ONNX model and one JSON config. */
     private fun importPackage(
         context: Context,
         uri: Uri,
         packageName: String,
         directory: File
     ): File {
+        val input = context.contentResolver.openInputStream(uri)
+            ?: error("Could not open the model package")
+        return input.use { importPackageFromStream(it, packageName, directory) }
+    }
+
+    private fun importPackageFromStream(
+        input: InputStream,
+        packageName: String,
+        directory: File
+    ): File {
         val baseName = packageName
             .substringBeforeLast('.', missingDelimiterValue = packageName)
+            .ifBlank { "imported_model" }
             .replace(Regex("[^A-Za-z0-9._-]"), "_")
             .trim('_')
             .take(120)
@@ -121,35 +141,50 @@ object ModelRepository {
         }
         val modelTemporary = File(temporaryDirectory, PACKAGE_MODEL_ENTRY)
         val configTemporary = File(temporaryDirectory, PACKAGE_CONFIG_ENTRY)
+        var preferredModel = false
+        var preferredConfig = false
         var modelFound = false
         var configFound = false
 
         try {
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                ZipInputStream(BufferedInputStream(input)).use { zip ->
-                    while (true) {
-                        val entry = zip.nextEntry ?: break
-                        if (entry.isDirectory) continue
-                        val entryName = entry.name.replace('\\', '/')
-                        val output = when (entryName.lowercase(Locale.US)) {
-                            PACKAGE_MODEL_ENTRY -> modelTemporary
-                            PACKAGE_CONFIG_ENTRY -> configTemporary
-                            else -> error("The model package contains an unexpected file")
+            ZipInputStream(BufferedInputStream(input)).use { zip ->
+                while (true) {
+                    val entry = zip.nextEntry ?: break
+                    if (entry.isDirectory) continue
+                    val fileName = entry.name.replace('\\', '/')
+                        .substringAfterLast('/')
+                        .lowercase(Locale.US)
+                    val isPreferredModel = fileName == PACKAGE_MODEL_ENTRY
+                    val isPreferredConfig = fileName == PACKAGE_CONFIG_ENTRY
+                    val isOnnx = fileName.endsWith(".onnx")
+                    val isJson = fileName.endsWith(".json")
+                    when {
+                        isOnnx && (isPreferredModel || !preferredModel) -> {
+                            require(isPreferredModel || !modelFound) {
+                                "The zip contains more than one ONNX file"
+                            }
+                            copyLimited(zip, modelTemporary, MAX_PACKAGE_ENTRY_BYTES)
+                            modelFound = true
+                            preferredModel = isPreferredModel
                         }
-                        require(!output.exists()) {
-                            "The model package contains duplicate files"
+                        isJson && (isPreferredConfig || !preferredConfig) -> {
+                            require(isPreferredConfig || !configFound) {
+                                "The zip contains more than one JSON file"
+                            }
+                            copyLimited(zip, configTemporary, MAX_PACKAGE_ENTRY_BYTES)
+                            configFound = true
+                            preferredConfig = isPreferredConfig
                         }
-                        copyLimited(zip, output, MAX_PACKAGE_ENTRY_BYTES)
-                        if (output == modelTemporary) modelFound = true else configFound = true
+                        else -> zip.closeEntry()
                     }
                 }
-            } ?: error("Could not open the model package")
+            }
 
             require(modelFound) {
-                "The model package must contain model.onnx"
+                "The zip must contain an .onnx model file"
             }
             require(configFound) {
-                "The model package must contain model.json"
+                "The zip must contain a .json configuration file with labels and input size"
             }
 
             val modelFile = File(directory, "$baseName.onnx")
@@ -160,6 +195,14 @@ object ModelRepository {
         } finally {
             temporaryDirectory.deleteRecursively()
         }
+    }
+
+    private fun looksLikeZip(context: Context, uri: Uri): Boolean {
+        return context.contentResolver.openInputStream(uri)?.use { input ->
+            val header = ByteArray(2)
+            val read = input.read(header)
+            read == 2 && header[0] == 0x50.toByte() && header[1] == 0x4B.toByte()
+        } ?: false
     }
 
     private fun copyLimited(input: java.io.InputStream, output: File, limit: Long) {
