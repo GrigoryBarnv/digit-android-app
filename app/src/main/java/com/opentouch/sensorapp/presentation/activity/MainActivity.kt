@@ -2,7 +2,9 @@ package com.opentouch.sensorapp.presentation.activity
 
 import android.Manifest
 import android.content.Intent
+import android.content.res.Configuration
 import android.net.Uri
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.WindowManager
@@ -47,6 +49,7 @@ class MainActivity : FragmentActivity() {
         // hand off to each other plainly instead.
         installSplashScreen()
         super.onCreate(savedInstanceState)
+        applyOrientationLockForScreenSize()
         incomingModelUri = modelUriFromIntent(intent)
         // Keep the screen on for as long as the app is in the foreground -
         // Roberto reported the screen timing out and turning off mid-use
@@ -82,6 +85,39 @@ class MainActivity : FragmentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         incomingModelUri = modelUriFromIntent(intent)
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // Covers a foldable crossing the phone/tablet size threshold while
+        // this activity is already running (e.g. unfolding into its larger
+        // screen) - onCreate's own call to this only covers the size the
+        // app happened to launch at. Manifest configChanges already includes
+        // screenLayout/smallestScreenSize/screenSize, so this callback fires
+        // instead of an activity restart, keeping Compose state intact.
+        applyOrientationLockForScreenSize()
+    }
+
+    /**
+     * Phones stay locked to portrait - the camera preview UI (buttons,
+     * sensor info panel, RGB/FPS menus) is laid out for a tall, narrow
+     * screen and isn't adapted for a rotated phone layout. Tablets (and a
+     * foldable once unfolded to tablet size) get free sensor-based rotation
+     * instead, since the larger screen comfortably fits the same UI in
+     * either orientation and users are more likely to actually hold a
+     * tablet in landscape.
+     *
+     * smallestScreenWidthDp >= 600 is the standard Android convention for
+     * "this is a tablet, not a phone" (same threshold the sw600dp resource
+     * qualifier uses) - re-read live here rather than cached, so a foldable
+     * that unfolds mid-session re-evaluates against its new screen size.
+     */
+    private fun applyOrientationLockForScreenSize() {
+        requestedOrientation = if (resources.configuration.smallestScreenWidthDp >= 600) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
     }
 
     private fun modelUriFromIntent(intent: Intent?): Uri? {
