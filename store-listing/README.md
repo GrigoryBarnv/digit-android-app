@@ -6,12 +6,11 @@ Store presence → Main store listing.
 
 ## Status
 
-- **App icon**: placeholder source added (`icon/opentouch-icon-source-432x432.png`,
-  pulled from the app's own adaptive-icon foreground layer). This is a
-  starting point only - Play Console requires the icon as a **512x512,
-  32-bit PNG with an alpha channel**, no baked-in rounded corners or
-  drop shadow. The current file is 432x432 and has no alpha channel, so it
-  needs to be re-exported/padded to spec before upload.
+- **App icon**: ready to upload (`icon/opentouch-icon-512.png`). Built by
+  padding the 432x432 adaptive-icon foreground layer onto a 512x512 white
+  canvas (the artwork only fills ~55-60% of its original canvas as
+  safe-zone padding, so no upscaling was needed) and adding an alpha
+  channel. Meets the 512x512, 32-bit PNG with alpha requirement.
 - **Feature graphic**: not created yet. Play Console requires **1024x500**,
   JPG or 24-bit PNG (no alpha).
 - **Screenshots**: not added yet - to be captured once the app UI is
