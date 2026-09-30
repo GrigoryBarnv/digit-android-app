@@ -33,8 +33,13 @@ data class ResolutionFpsOption(
  * Verified specs:
  *   DIGIT        : QVGA 320x240 @ 60/30 fps, VGA 640x480 @ 30/15 fps
  *                  (Meta's official digit-interface DigitDefaults)
- *   GelSight Mini: 1920x1080 @ 25 fps (observed full-HD UVC stream; one RGBA
- *                                      frame is about 8.3 MB after GL readback)
+ *   GelSight Mini: 3280x2464 @ 25 fps (confirmed 2026-09-16 via USB descriptor
+ *                                      inspection and on-device negotiation
+ *                                      log - the sensor's Video Streaming
+ *                                      interface advertises exactly one
+ *                                      MJPEG frame size, this one; the
+ *                                      earlier 1920x1080 figure here was an
+ *                                      unverified datasheet guess)
  */
 data class SupportedSensor(
     val displayName: String,
@@ -122,15 +127,21 @@ object SupportedSensors {
             vendorId = 0x0C45,
             productIds = setOf(0x636D),   // R0B (28BJ-5HLX). Add future revision PIDs here.
             nameFragment = "gelsight",
-            maxFps = 25,           // GelSight Mini: 25 FPS (datasheet)
-            nativeWidth = 1920,    // Full-HD UVC stream. 1920*1080*4 = about 8.3 MB RGBA.
-            nativeHeight = 1080,
+            // Confirmed 2026-09-16 via USB descriptor inspection (USB Tree
+            // View on Windows) and an on-device negotiation log on Android:
+            // this sensor's Video Streaming interface advertises exactly ONE
+            // format (MJPEG) with exactly ONE frame size - 3280x2464 @
+            // 25fps. There is no separate lower-resolution streaming mode,
+            // and bStillCaptureMethod=0 (no formal UVC Still Image Capture
+            // either) - this genuinely is the sensor's one and only mode.
+            // The previous "1920x1080 full-HD" figure here was an
+            // unverified datasheet guess.
+            maxFps = 25,
+            nativeWidth = 3280,
+            nativeHeight = 2464,
             folderName = "GelSightMini",
-            // GelSight Mini advertises a full-HD UVC stream. The app reports
-            // this explicitly because one RGBA frame is about 8 MB after GL
-            // readback, even though the sensor spec mentions an 8MP camera.
             resolutionFpsOptions = listOf(
-                ResolutionFpsOption(1920, 1080, 25),
+                ResolutionFpsOption(3280, 2464, 25),
             ),
         ),
         SupportedSensor(
