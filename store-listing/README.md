@@ -11,11 +11,19 @@ Store presence → Main store listing.
   canvas (the artwork only fills ~55-60% of its original canvas as
   safe-zone padding, so no upscaling was needed) and adding an alpha
   channel. Meets the 512x512, 32-bit PNG with alpha requirement.
-- **Feature graphic**: not created yet. Play Console requires **1024x500**,
-  JPG or 24-bit PNG (no alpha).
-- **Screenshots**: not added yet - to be captured once the app UI is
-  finalized (per team decision, 2026-09-24). Folders are set up below so
-  they just need to be dropped in.
+- **Feature graphic**: ready to upload
+  (`feature-graphic/opentouch-feature-graphic-1024x500.png`). 1024x500,
+  24-bit PNG, no alpha.
+- **Screenshots**: ready to upload (`screenshots/phone/`, 9 images).
+  Real on-device photos (not simulator renders) padded to exactly 9:16
+  with a color-matched letterbox (no visible seam) rather than cropped,
+  so no UI is cut off. Cover: idle dashboard, DIGIT live preview + device
+  info, RGB controls, FPS/resolution panel, GelSight Mini pairing +
+  device info, live ML inference overlay, and the about/credits screen.
+  Play Console only accepts up to 8 per device type, so drop one before
+  uploading - `04_rgb_controls.png` is the most redundant with
+  `05_fps_resolution.png` if you need to cut exactly one.
+  `screenshots/tablet-7in/` and `tablet-10in/` are still empty.
 
 ## Screenshot requirements (Play Console)
 
