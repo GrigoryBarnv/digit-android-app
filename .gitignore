@@ -15,6 +15,7 @@
 .cxx
 local.properties
 model_key_finger/output/*.opentouchmodel
+model_max_model/output/*.opentouchmodel
 
 # Debug/scratch output pulled off the device during testing (crash logs,
 # raw sensor capture dumps, ad-hoc screenshots) - not source, not meant
