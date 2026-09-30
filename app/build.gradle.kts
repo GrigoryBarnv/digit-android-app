@@ -23,24 +23,55 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // Play Store release signing, sourced from environment variables that only
+    // exist in the GitHub Actions release workflow (see
+    // .github/workflows/play-store-release.yml and its PLAY_* secrets).
+    // Never hardcode real Play Store signing secrets here - unlike
+    // internalRelease below, this key signs the app identity Google Play
+    // actually publishes under, so it must never be checked into git.
+    val playStoreKeystorePath = System.getenv("PLAY_STORE_KEYSTORE_PATH")
+    val playStoreKeystorePassword = System.getenv("PLAY_STORE_KEYSTORE_PASSWORD")
+    val playStoreKeyAlias = System.getenv("PLAY_STORE_KEY_ALIAS")
+    val playStoreKeyPassword = System.getenv("PLAY_STORE_KEY_PASSWORD")
+    val hasPlayStoreSigningEnv = !playStoreKeystorePath.isNullOrBlank() &&
+        !playStoreKeystorePassword.isNullOrBlank() &&
+        !playStoreKeyAlias.isNullOrBlank() &&
+        !playStoreKeyPassword.isNullOrBlank()
+
     signingConfigs {
         create("internalRelease") {
             // Fixed, shared keystore for internal testing builds only. Checked into
             // the repo on purpose so every CI run and every teammate's local build
             // signs with the SAME key, so app updates always install cleanly instead
             // of hitting "signature mismatch" errors. NOT for Play Store publishing -
-            // generate and secure a real release keystore before that.
+            // this is exactly the key playStoreRelease below exists to avoid using.
             storeFile = file("release-debug.keystore")
             storePassword = "opentouch2026"
             keyAlias = "opentouchrelease"
             keyPassword = "opentouch2026"
+        }
+        if (hasPlayStoreSigningEnv) {
+            create("playStoreRelease") {
+                storeFile = file(playStoreKeystorePath!!)
+                storePassword = playStoreKeystorePassword
+                keyAlias = playStoreKeyAlias
+                keyPassword = playStoreKeyPassword
+            }
         }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("internalRelease")
+            // Falls back to the shared internal-testing key whenever the
+            // PLAY_STORE_* secrets aren't present (every local dev build, and
+            // the plain android-ci.yml/android-release.yml workflows) - only
+            // play-store-release.yml's workflow sets them, so only that
+            // workflow's :app:bundleRelease actually gets signed with the
+            // real Play Store key.
+            signingConfig = signingConfigs.getByName(
+                if (hasPlayStoreSigningEnv) "playStoreRelease" else "internalRelease"
+            )
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

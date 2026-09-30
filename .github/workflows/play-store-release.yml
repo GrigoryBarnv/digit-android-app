@@ -1,0 +1,124 @@
+name: Publish to Google Play
+
+# Manual by default (Actions tab -> Publish to Google Play -> Run workflow) so
+# a release only goes out when someone deliberately asks for it. Also runs on
+# version tags for convenience, always defaulting to the "internal" track -
+# promoting to alpha/beta/production is a separate, deliberate step you take
+# in Play Console (or a future workflow_dispatch run with a different track
+# input), never automatic from a tag push.
+on:
+  workflow_dispatch:
+    inputs:
+      track:
+        description: 'Play Console track to release to'
+        required: true
+        default: 'internal'
+        type: choice
+        options:
+          - internal
+          - alpha
+          - beta
+          - production
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Verify required secrets are present
+        run: |
+          missing=()
+          [ -z "${{ secrets.PLAY_STORE_KEYSTORE_BASE64 }}" ] && missing+=("PLAY_STORE_KEYSTORE_BASE64")
+          [ -z "${{ secrets.PLAY_STORE_KEYSTORE_PASSWORD }}" ] && missing+=("PLAY_STORE_KEYSTORE_PASSWORD")
+          [ -z "${{ secrets.PLAY_STORE_KEY_ALIAS }}" ] && missing+=("PLAY_STORE_KEY_ALIAS")
+          [ -z "${{ secrets.PLAY_STORE_KEY_PASSWORD }}" ] && missing+=("PLAY_STORE_KEY_PASSWORD")
+          [ -z "${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}" ] && missing+=("PLAY_STORE_SERVICE_ACCOUNT_JSON")
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::Missing required repo secrets: ${missing[*]}"
+            echo "See store-listing/README.md for how to generate and add each one."
+            exit 1
+          fi
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-31'
+
+      - name: Write local.properties
+        run: |
+          echo "ANDROID_HOME=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
+          echo "sdk.dir=${ANDROID_SDK_ROOT}" > local.properties
+
+      - name: Set up NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27
+          add-to-path: false
+          link-to-sdk: true
+
+      - name: Export NDK path
+        run: |
+          echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
+          echo "NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Decode Play Store release keystore
+        run: |
+          echo "${{ secrets.PLAY_STORE_KEYSTORE_BASE64 }}" | base64 -d > "${RUNNER_TEMP}/play-store-release.keystore"
+          echo "PLAY_STORE_KEYSTORE_PATH=${RUNNER_TEMP}/play-store-release.keystore" >> "$GITHUB_ENV"
+
+      - name: Build release App Bundle
+        env:
+          PLAY_STORE_KEYSTORE_PASSWORD: ${{ secrets.PLAY_STORE_KEYSTORE_PASSWORD }}
+          PLAY_STORE_KEY_ALIAS: ${{ secrets.PLAY_STORE_KEY_ALIAS }}
+          PLAY_STORE_KEY_PASSWORD: ${{ secrets.PLAY_STORE_KEY_PASSWORD }}
+        run: ./gradlew :app:bundleRelease --stacktrace
+
+      - name: Read app version
+        id: app_version
+        run: |
+          VERSION_NAME=$(./gradlew -q :app:printVersionName --console=plain | tail -n 1 | tr -d '\r')
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Locate release AAB
+        id: aab
+        run: |
+          AAB_PATH=$(find app/build/outputs/bundle/release -name "*.aab" | head -n 1)
+          if [ -z "$AAB_PATH" ]; then
+            echo "No .aab produced - check the build step above."
+            find app/build/outputs -name "*.aab" -o -name "*.apk" | sort
+            exit 1
+          fi
+          echo "aab_path=$AAB_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to Google Play
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
+          packageName: com.opentouch.android
+          releaseFiles: ${{ steps.aab.outputs.aab_path }}
+          track: ${{ github.event.inputs.track || 'internal' }}
+          status: completed
+          # inProgress releases (staged rollout %) aren't used here - every
+          # release goes out at 100% of whichever track it targets. Adjust
+          # with a rollout input later if a staged production rollout is
+          # ever needed.
