@@ -581,7 +581,35 @@ class MultiCameraClient(ctx: Context, callback: IDeviceConnectCallBack?) {
          * @param height surface height
          */
         fun setRenderSize(width: Int, height: Int) {
-            mSizeChangedFuture?.set(Pair(width, height))
+            // FIX (2026-09-29, v2): mSizeChangedFuture is a one-shot future used
+            // only once, during the initial MSG_START_PREVIEW startup, to hand
+            // off the first measured surface size before mRenderManager exists.
+            //
+            // The first version of this fix gated on mSizeChangedFuture?.isDone,
+            // which turned out to be unreliable: logcat confirmed that the
+            // initial mSizeChangedFuture?.get(2000, ...) wait can time out
+            // (TimeoutException from SettableFuture$Sync.get) when nothing calls
+            // .set() in time. Once that happens, isDone stays false FOREVER -
+            // the original waiter already gave up and moved on, so nothing is
+            // listening anymore, but the future never transitions to "done"
+            // either. Every later rotation then fell into the dead
+            // mSizeChangedFuture?.set(...) branch instead of resizing the GL
+            // viewport, which is exactly why the dome preview stayed
+            // half-black after rotating.
+            //
+            // mRenderManager being non-null is the reliable signal that
+            // startup has completed and a live render pipeline exists -
+            // forward directly to it whenever it's available, regardless of
+            // the future's done-state. Only use the future-based handoff for
+            // the true one-time case where startup is still in flight and no
+            // render manager exists yet.
+            val renderManager = mRenderManager
+            Logger.i(TAG, "!!!ICAMERA_SETRENDERSIZE!!! width=$width height=$height futureDone=${mSizeChangedFuture?.isDone} mRenderManager=${renderManager != null}")
+            if (renderManager != null) {
+                renderManager.setRenderSize(width, height)
+            } else {
+                mSizeChangedFuture?.set(Pair(width, height))
+            }
         }
 
         /**
