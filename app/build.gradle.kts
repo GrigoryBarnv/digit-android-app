@@ -14,7 +14,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.opentouch.sensorapp"
+        applicationId = "com.opentouch.android"
         minSdk = 24
         targetSdk = 36
         versionCode = 14

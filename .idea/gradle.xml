@@ -13,6 +13,7 @@
             <option value="$PROJECT_DIR$/libausbc" />
             <option value="$PROJECT_DIR$/libnative" />
             <option value="$PROJECT_DIR$/libuvc" />
+            <option value="$PROJECT_DIR$/mlruntime" />
           </set>
         </option>
       </GradleProjectSettings>
