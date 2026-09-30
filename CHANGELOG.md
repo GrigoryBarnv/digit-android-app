@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.16
+
+- Tablets now rotate freely between portrait and landscape; phones stay
+  locked to portrait. Fixed the dome camera preview staying partly black
+  after rotating on tablets.
+- Corrected GelSight Mini's reported native resolution to 3280x2464
+  (previously an unverified 1920x1080 guess).
+- AI model picker: shows a checkmark and highlight on the currently active
+  model, scrolls instead of overflowing the screen when several models are
+  imported, and no longer switches out of video mode when you pick a model.
+- Play Store listing assets (icon, feature graphic, screenshots) and an
+  automated GitHub Actions release pipeline added for future releases.
+
 ## 1.1.15
 
 - Model packages are now a normal `.zip` with `model.onnx` and `model.json`.
