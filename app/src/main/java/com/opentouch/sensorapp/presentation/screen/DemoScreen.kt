@@ -25,15 +25,19 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
@@ -47,9 +51,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.OpenInNew
@@ -898,6 +904,20 @@ fun DemoScreen(
                             modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
+                            // Active model indicator - which model is actually
+                            // producing the result/status shown below. Kept
+                            // small/muted since the result itself is the main
+                            // point of this overlay.
+                            selectedModel?.displayName?.let { activeModelName ->
+                                Text(
+                                    activeModelName.uppercase(),
+                                    color = Color(0xFFB9A6FF),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.sp,
+                                    modifier = Modifier.padding(bottom = 4.dp)
+                                )
+                            }
                             when {
                                 analysisResult != null -> {
                                     val result = analysisResult!!
@@ -1130,45 +1150,87 @@ fun DemoScreen(
                                 onClick = {}
                             )
                         }
-                        availableModels.forEach { model ->
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        model.displayName,
-                                        color = if (mlRuntimeState == MlRuntimeState.READY) {
-                                            Color.White
-                                        } else {
-                                            Color.LightGray
+                        // Scrollable + height-capped so a handful of imported
+                        // models doesn't push the "Import model files" row
+                        // (or the whole menu) off-screen - None, the runtime
+                        // status row, and Import stay pinned outside this
+                        // scrollable section instead of scrolling away with
+                        // the list.
+                        Column(
+                            modifier = Modifier
+                                .heightIn(max = 240.dp)
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            availableModels.forEach { model ->
+                                // Currently active model - same identity check
+                                // used elsewhere (StoredModel isn't a data
+                                // class, so compare by the underlying file).
+                                val isActiveModel = selectedModel?.modelFile?.canonicalPath ==
+                                    model.modelFile.canonicalPath
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            model.displayName,
+                                            color = when {
+                                                mlRuntimeState != MlRuntimeState.READY -> Color.LightGray
+                                                isActiveModel -> Color(0xFFB9A6FF)
+                                                else -> Color.White
+                                            },
+                                            fontWeight = if (isActiveModel) FontWeight.Bold else FontWeight.Normal,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    },
+                                    // Active-model checkmark - the one persistent,
+                                    // always-visible indicator of which model is
+                                    // currently selected/running, right where the
+                                    // user picks it.
+                                    leadingIcon = if (isActiveModel) {
+                                        {
+                                            Icon(
+                                                Icons.Filled.Check,
+                                                contentDescription = "Currently active model",
+                                                tint = Color(0xFFB9A6FF)
+                                            )
                                         }
-                                    )
-                                },
-                                trailingIcon = {
-                                    IconButton(onClick = { requestModelDeletion(model) }) {
-                                        Icon(
-                                            Icons.Filled.Delete,
-                                            contentDescription = "Delete ${model.displayName}",
-                                            tint = Color(0xFFFFB4AB)
-                                        )
+                                    } else null,
+                                    trailingIcon = {
+                                        IconButton(onClick = { requestModelDeletion(model) }) {
+                                            Icon(
+                                                Icons.Filled.Delete,
+                                                contentDescription = "Delete ${model.displayName}",
+                                                tint = Color(0xFFFFB4AB)
+                                            )
+                                        }
+                                    },
+                                    onClick = {
+                                        if (mlRuntimeState == MlRuntimeState.READY) {
+                                            selectedModel = model
+                                            // Do NOT force isVideoMode = false here.
+                                            // This used to reset the camera to photo
+                                            // mode any time a model was picked, but
+                                            // AI + video are a fully supported
+                                            // combination now (see
+                                            // addModelOutputToRecording and
+                                            // analysisOverlayText/recording burn-in
+                                            // above) - selecting a model while
+                                            // already in video mode shouldn't silently
+                                            // kick the user back to photo mode.
+                                            analysisResult = null
+                                            analysisError = null
+                                            analysisUpdateSequence = 0
+                                            analysisDurationMs = null
+                                            modelSelectionMessage = "${model.displayName} selected"
+                                            modelSelectionMessageId += 1
+                                            modelSelectionTone.startTone(
+                                                ToneGenerator.TONE_PROP_ACK,
+                                                120
+                                            )
+                                            showModelMenu = false
+                                        }
                                     }
-                                },
-                                onClick = {
-                                    if (mlRuntimeState == MlRuntimeState.READY) {
-                                        selectedModel = model
-                                        isVideoMode = false
-                                        analysisResult = null
-                                        analysisError = null
-                                        analysisUpdateSequence = 0
-                                        analysisDurationMs = null
-                                        modelSelectionMessage = "${model.displayName} selected"
-                                        modelSelectionMessageId += 1
-                                        modelSelectionTone.startTone(
-                                            ToneGenerator.TONE_PROP_ACK,
-                                            120
-                                        )
-                                        showModelMenu = false
-                                    }
-                                }
-                            )
+                                )
+                            }
                         }
                         if (availableModels.isEmpty()) {
                             DropdownMenuItem(
@@ -1329,7 +1391,7 @@ fun DemoScreen(
                                         overflow = TextOverflow.Ellipsis
                                     )
                                 },
-                                leadingIcon = { Icon(Icons.Filled.Info, contentDescription = null, tint = Color.White) },
+                                leadingIcon = { Icon(Icons.Filled.Link, contentDescription = null, tint = Color.White) },
                                 onClick = {
                                     showSettingsMenu = false
                                     showRgbControls = false
@@ -1341,7 +1403,7 @@ fun DemoScreen(
                         } else {
                             DropdownMenuItem(
                                 text = { Text("No sensor connected", color = Color(0xFF9A9A9A)) },
-                                leadingIcon = { Icon(Icons.Filled.Info, contentDescription = null, tint = Color(0xFF9A9A9A)) },
+                                leadingIcon = { Icon(Icons.Filled.LinkOff, contentDescription = null, tint = Color(0xFF9A9A9A)) },
                                 enabled = false,
                                 onClick = { }
                             )
@@ -1525,7 +1587,7 @@ fun DemoScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .padding(bottom = bottomBarHeight + 12.dp)
+                    .padding(bottom = bottomBarHeight + 20.dp)
                     .background(Color(0xFF262626), RoundedCornerShape(12.dp))
                     .border(1.dp, Color(0xFF3D3D3D), RoundedCornerShape(12.dp))
                     .padding(12.dp)
@@ -1602,12 +1664,12 @@ fun DemoScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .padding(bottom = bottomBarHeight + 12.dp)
+                    .padding(bottom = bottomBarHeight + 20.dp)
                     .background(Color(0xFF262626), RoundedCornerShape(12.dp))
                     .border(1.dp, Color(0xFF3D3D3D), RoundedCornerShape(12.dp))
                     .padding(12.dp)
             ) {
-                Column(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
                     Text(
                         "Device: ${matchedSensor?.shortName ?: detectedDevice.name}",
                         color = Color.White,
@@ -1615,7 +1677,7 @@ fun DemoScreen(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
                     Text(
                         "Vendor ID: 0x%04X (%d)".format(detectedDevice.vendorId, detectedDevice.vendorId),
                         fontSize = 12.sp,
@@ -1625,14 +1687,14 @@ fun DemoScreen(
                         "Product ID: 0x%04X (%d)".format(detectedDevice.productId, detectedDevice.productId),
                         fontSize = 12.sp,
                         color = Color(0xFFBDBDBD),
-                        modifier = Modifier.padding(top = 4.dp)
+                        modifier = Modifier.padding(top = 2.dp)
                     )
                     currentPreviewSize?.let { (width, height) ->
                         Text(
                             "Stream: ${width}x${height} (${formatRgbaFrameSize(width, height)})",
                             fontSize = 12.sp,
                             color = Color(0xFFBDBDBD),
-                            modifier = Modifier.padding(top = 4.dp)
+                            modifier = Modifier.padding(top = 2.dp)
                         )
                     }
                     if (!detectedDevice.serialNumber.isNullOrBlank()) {
@@ -1642,30 +1704,39 @@ fun DemoScreen(
                             color = Color(0xFFBDBDBD),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(top = 4.dp)
+                            modifier = Modifier.padding(top = 2.dp)
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
 
+                    // The explicit "Close" button was removed - this panel is
+                    // dismissed by tapping outside it instead (see the
+                    // full-screen transparent Box above that sets
+                    // showDeviceInfoPanel = false on click). Disconnect
+                    // remains as the one explicit action here.
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Button(
-                            onClick = { showDeviceInfoPanel = false },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF5E5D62), contentColor = Color.White)
-                        ) { Text("Close") }
-
                         Button(
                             onClick = {
                                 showDeviceInfoPanel = false
                                 CameraPreviewFragment.declineConnect()
                             },
                             modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(vertical = 8.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE2504A), contentColor = Color.White)
-                        ) { Text("Disconnect") }
+                        ) {
+                            Icon(
+                                Icons.Filled.LinkOff,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Disconnect Sensor", fontSize = 13.sp)
+                        }
                     }
                 }
             }
@@ -1684,7 +1755,7 @@ fun DemoScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .padding(bottom = bottomBarHeight + 12.dp)
+                    .padding(bottom = bottomBarHeight + 20.dp)
                     .background(Color(0xFF262626), RoundedCornerShape(12.dp))
                     .border(1.dp, Color(0xFF3D3D3D), RoundedCornerShape(12.dp))
                     .padding(12.dp)
@@ -1734,7 +1805,7 @@ fun DemoScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .padding(bottom = bottomBarHeight + 12.dp)
+                    .padding(bottom = bottomBarHeight + 20.dp)
                     .background(Color(0xFF262626), RoundedCornerShape(12.dp))
                     .border(1.dp, Color(0xFF3D3D3D), RoundedCornerShape(12.dp))
                     .padding(12.dp)
@@ -1939,7 +2010,7 @@ fun DemoScreen(
                         }
 
                         Spacer(modifier = Modifier.height(14.dp))
-                        Text("OpenTouch", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.Bold)
+                        Text("OpenTouch Mobile", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.Bold)
                         Spacer(modifier = Modifier.height(6.dp))
                         Box(
                             modifier = Modifier
@@ -1973,7 +2044,8 @@ fun DemoScreen(
                         listOf(
                             "Nasima Mallick" to "https://www.linkedin.com/in/nasima-mallick-110351211/",
                             "Grigory Baranov" to "https://www.linkedin.com/in/grigory-baranov/",
-                            "Gayathri Kakarla" to "https://www.linkedin.com/in/gayathri-kakarla/"
+                            "Gayathri Kakarla" to "https://www.linkedin.com/in/gayathri-kakarla/",
+                            "Roberto Calandra" to "https://www.linkedin.com/in/rcalandra/"
                         ).forEach { (name, linkedInUrl) ->
                             val initials = name.split(" ")
                                 .mapNotNull { it.firstOrNull()?.toString() }
@@ -1982,8 +2054,16 @@ fun DemoScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
+                                        // Explicitly force this into an external browser tab
+                                        // rather than letting it resolve to the LinkedIn app
+                                        // (if installed) or reuse this app's own task/window -
+                                        // CATEGORY_BROWSABLE + FLAG_ACTIVITY_NEW_TASK opens a
+                                        // fresh browser task outside OpenTouch itself.
                                         context.startActivity(
-                                            Intent(Intent.ACTION_VIEW, Uri.parse(linkedInUrl))
+                                            Intent(Intent.ACTION_VIEW, Uri.parse(linkedInUrl)).apply {
+                                                addCategory(Intent.CATEGORY_BROWSABLE)
+                                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                            }
                                         )
                                     }
                                     .padding(vertical = 7.dp),
@@ -2028,11 +2108,17 @@ fun DemoScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
+                                    // Same as the LinkedIn rows above: force this into an
+                                    // external browser tab rather than staying tied to
+                                    // OpenTouch's own task/window.
                                     context.startActivity(
                                         Intent(
                                             Intent.ACTION_VIEW,
-                                            Uri.parse("https://lasr-lab.github.io/opentouch.org/webpage/")
-                                        )
+                                            Uri.parse("https://lasr-lab.github.io/opentouch.org/mobile/")
+                                        ).apply {
+                                            addCategory(Intent.CATEGORY_BROWSABLE)
+                                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                        }
                                     )
                                 }
                                 .padding(vertical = 6.dp),
@@ -2046,7 +2132,7 @@ fun DemoScreen(
                                 modifier = Modifier.size(18.dp)
                             )
                             Text(
-                                "Visit our website",
+                                "OpenTouch Mobile Website",
                                 color = Color.White,
                                 fontSize = 14.sp,
                                 modifier = Modifier.weight(1f)
