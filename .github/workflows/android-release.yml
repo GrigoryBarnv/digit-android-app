@@ -84,3 +84,30 @@ jobs:
             app/build/outputs/apk/release/OpenTouch-v*.apk
             app/build/outputs/apk/release/OpenTouch-latest.apk
           generate_release_notes: true
+
+      - name: Checkout website repo
+        uses: actions/checkout@v5
+        with:
+          repository: lasr-lab/opentouch.org
+          token: ${{ secrets.WEBSITE_REPO_TOKEN }}
+          path: opentouch-website
+
+      - name: Publish new version to the website
+        working-directory: opentouch-website
+        run: |
+          VERSION="${{ steps.app_version.outputs.version_name }}"
+          mkdir -p webpage
+          {
+            echo '{'
+            echo "  \"version\": \"$VERSION\""
+            echo '}'
+          } > webpage/version.json
+          if git diff --quiet; then
+            echo "version.json already up to date, nothing to push"
+            exit 0
+          fi
+          git config user.name "opentouch-release-bot"
+          git config user.email "actions@github.com"
+          git add webpage/version.json
+          git commit -m "Update website app version to $VERSION"
+          git push origin main
